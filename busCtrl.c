@@ -72,10 +72,6 @@ void write_to_flash(uint32_t addr, const void* buf, size_t len){
 	for(uint32_t i=addr-(addr%FLASH_SECTOR_SIZE); i<=addr+len; i+=FLASH_SECTOR_SIZE){
 		read_from_flash(i, blockCopy, FLASH_SECTOR_SIZE);
 		memcpy(blockCopy+(addr%FLASH_SECTOR_SIZE), buf, len);
-		dbg_printf("assert <= PICO_FLASH_SIZE_BYTES == 0x%X\n", i + FLASH_SECTOR_SIZE <= PICO_FLASH_SIZE_BYTES);
-		dbg_printf("assert & (FLASH_SECTOR_SIZE-1) == 0x%X\n", !(i & (FLASH_SECTOR_SIZE - 1)));
-		dbg_printf("assert & (FLASH_SECTOR_SIZE-1) == 0x%X\n", !(FLASH_SECTOR_SIZE & (FLASH_SECTOR_SIZE - 1)));
-		dbg_printf("asserts passed!\n");
 		flash_range_erase(i, FLASH_SECTOR_SIZE);
 //		flash_range_program(i, blockCopy, FLASH_SECTOR_SIZE);
 	}
