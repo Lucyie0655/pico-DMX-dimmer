@@ -21,7 +21,7 @@ void do_i2c_transmit(void);		//this is the only one that we use right now
 
 //void do_spi_transmit(void);		//we could use this for wireless DMX? TODO:?
 
-#define FLASH_DMX_ADDR PICO_FLASH_SIZE_BYTES - FLASH_PAGE_SIZE
+#define FLASH_DMX_ADDR (1024*1024)
 void __not_in_flash_func(write_to_flash)(uint32_t, const void*, size_t);				//I don't know where we should put these functions
 void __not_in_flash_func(read_from_flash)(uint32_t, void*, size_t);
 

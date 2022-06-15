@@ -76,7 +76,6 @@ void write_to_flash(uint32_t addr, const void* buf, size_t len){
 		dbg_printf("assert & (FLASH_SECTOR_SIZE-1) == 0x%X\n", !(i & (FLASH_SECTOR_SIZE - 1)));
 		dbg_printf("assert & (FLASH_SECTOR_SIZE-1) == 0x%X\n", !(FLASH_SECTOR_SIZE & (FLASH_SECTOR_SIZE - 1)));
 		dbg_printf("asserts passed!\n");
-		sleep_ms(1000);
 		flash_range_erase(i, FLASH_SECTOR_SIZE);
 //		flash_range_program(i, blockCopy, FLASH_SECTOR_SIZE);
 	}

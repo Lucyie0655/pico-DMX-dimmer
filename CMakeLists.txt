@@ -6,6 +6,7 @@ include(pico_sdk_import.cmake)
 project(DMX_Dimmer C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_COMPILE_OBJECT "${CMAKE_CXX_COMPILER} <SOURCE> -c -o <OBJECT> <FLAGS>")
 
 #initiallize the sdk
 pico_sdk_init()
