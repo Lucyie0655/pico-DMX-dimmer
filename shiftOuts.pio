@@ -1,0 +1,46 @@
+.program SftOutsCtrl		; 4 instructions
+
+	;note that we will see some different stuff from what you might expect
+	;when we have no new data waiting,
+	;a TRIAC only needs to have a quick control signal
+	;and will stay on until the end of the half-wave
+	;we are also going to drive GPB this way because it is way easier to time
+
+	.wrap_target
+		pull BLOCK			; grab any new data we may have received from the system
+
+		SftOutLoop:
+			out PINS, 1		; output the TRIAC and GPB data
+			irq wait 4 rel	; set irqs to indicate to the clock module that we are ready; don't continue until we have clocked this out
+			jmp !OSRE SftOutLoop ; keep going until there is nothing left
+	.wrap
+
+.program SftInsCtrl			; 6 instructions
+	mov X, NULL				; zero X in case we don't get data in time
+
+	.wrap_target
+		set Y, 7
+		SftInLoop:
+			irq wait 4 rel [1]  	; this really doesn't want to be relitive, because we only have one button SM
+			in PINS, 1		; input the button data after we clock the register
+			jmp Y-- SftInLoop ; keep going until there is nothing left
+		push				; send it to the system (but don't block if we can't)
+	.wrap
+
+.program SftClkCtrl			; 9 instructions
+.side_set 1 opt
+	mov X, NULL
+
+	.wrap_target
+		set Y, 7
+		SftClkLoop:
+			wait 1 irq 5 SIDE 0	; wait for the TRIACs to be ready; set the clock line low here
+			wait 1 irq 6	; wait for the GPB to be ready
+			;NOTE: we accidentally save ARM time like this because by waiting last for the longest
+			;setup, we only don't need to re-point the clock program at all
+			wait 1 irq 7 SIDE 1		; wait for the buttons to be ready
+			jmp Y--, SftClkLoop 	;jump and clock the register at the same time
+		set PINS, 1			; set RCLK
+		irq wait 0 			; tell the system that the transfer is complete, wait for more data
+		set PINS, 0			; clear RCLK
+	.wrap
