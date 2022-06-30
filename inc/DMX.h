@@ -42,7 +42,7 @@ typedef struct {			//656 bytes
 void DMX_init(void);
 
 void irq_DMX_onTXCompleate(void);
-void irq_DMX_onZero(void);
+void irq_DMX_onZero(uint __unused gpio, uint32_t __unused event);
 
 int DMX_parseCommand(char, char*, int);
 void DMX_setOutputs(char*, int);

@@ -42,7 +42,10 @@ static inline void lockChan(uint8_t channel){
 	info.lockedChan[channel/64] |= (channel%64);
 }
 
-void __irq irq_DMX_onZero(void/*uint __unused gpio, uint32_t __unused event*/){
+void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
+#ifdef ISRDEBUG
+	dbg_printf("z");
+#endif /*ISRDEBUG*/
 	uint16_t dataOff;				//points to the first DMX addr used by this handler
 	dataOff = info.baseAddr;		//the first address assigned to us
 
@@ -68,6 +71,10 @@ void __irq irq_DMX_onZero(void/*uint __unused gpio, uint32_t __unused event*/){
 
 	//FIXME: every time this is executed ther is a roughly 1/10,000 chance that we desync the shift register
 	if(nextPIOOut < 256){
+#ifdef TIMING_DEBUG
+#warning "TIMING_DEBUG causes prints from an ISR, be careful when using"
+		dbg_printf("%hi\n",nextPIOOut);
+#endif /*TIMING_DEBUG*/
 		pio_sm_exec(PIO_SHIFTS, 1, 9);		//jmp 9
 		pio_sm_exec(PIO_SHIFTS, 2, 9);		//jmp 9
 		pio_sm_exec(PIO_SHIFTS, 3, 13);		//jmp 13
@@ -135,7 +142,8 @@ just a macro but we can't inline this or pre-process this becuse info is static 
 */
 void DMX_setBaseAddr(int addr){
 	info.baseAddr = addr;
-	write_to_flash(FLASH_DMX_ADDR, &info.baseAddr, sizeof(info.baseAddr));
+/*TODO: write_to_flash is broken so someone needs to fix it*/
+//	write_to_flash(FLASH_DMX_ADDR, &info.baseAddr, sizeof(info.baseAddr));
 }
 int DMX_getBaseAddr(void){
 	return info.baseAddr;

@@ -34,17 +34,17 @@
 
 /*GPIO mappings*/
 #define GPIO_LED 25
-#define GPIO_SFT_CLK 15
+#define GPIO_SFT_CLK 16
 #define GPIO_SFT_RCK 17
-#define GPIO_DAT_GPA 2			//TODO: figure out what pin this actually is
-#define GPIO_DAT_GPB 2
-#define GPIO_DAT_BTN 2
-#define GPIO_ZC 2
-#define GPIO_ADC_SEL_A 2
-#define GPIO_ADC_SEL_B 2
-#define GPIO_ADC_SEL_C 2
-#define GPIO_ADC_THERM 2
-#define GPIO_ADC_ISENSE 2
+#define GPIO_DAT_GPA 18			//TODO: figure out what pin this actually is
+#define GPIO_DAT_GPB 19
+#define GPIO_DAT_BTN 20
+#define GPIO_ZC 15
+#define GPIO_ADC_SEL_A 13
+#define GPIO_ADC_SEL_B 12
+#define GPIO_ADC_SEL_C 11
+#define GPIO_ADC_THERM 27
+#define GPIO_ADC_ISENSE 28
 
 /*UART mappings*/
 #define DMX_UART uart0

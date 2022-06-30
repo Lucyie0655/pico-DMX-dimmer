@@ -32,9 +32,13 @@ target_sources(${PROJECT_NAME} PRIVATE
 #DEBUG==2 			- more debugging (use if you are changing something)
 #DEBUG==3			- just for me, less hardware is needed
 #ISRDEBUG			- spams your terminal with a whole bunch of shit, only use if you are forced to
+#TIMING_DEBUG 		- prints how far from ideal the pio is lagging
 #NOCTRL				- allows control over the USB debug interface NOTE: does not disable the actual DMX interface
-target_compile_definitions(${PROJECT_NAME} PUBLIC -DDEBUG=3)
-#target_compile_definitions(${PROJECT_NAME} PUBLIC -DNOCTRL)
+target_compile_definitions(${PROJECT_NAME} PUBLIC DEBUG=2)
+target_compile_definitions(${PROJECT_NAME} PUBLIC NO_I2C=1)
+target_compile_definitions(${PROJECT_NAME} PUBLIC TIMING_DEBUG=1)
+target_compile_definitions(${PROJECT_NAME} PUBLIC ISRDEBUG=1)
+#target_compile_definitions(${PROJECT_NAME} PUBLIC NOCTRL)
 target_include_directories(${PROJECT_NAME} PRIVATE "./inc")
 
 pico_set_binary_type(${PROJECT_NAME} blocked_ram)

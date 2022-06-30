@@ -122,6 +122,7 @@ void entryCore1(void){
 		read_sensors();					//check ADC values XXX: EXIT POINT
 		do_i2c_transmit();				//send any data we need on the I2C bus; XXX: BLOCKING
 
+
 #if !defined(DEBUG) || DEBUG != 3
 		//read all of the buttons NOTE: buttons are not debounced
 		buttonInfo = DMX_readButtons();
@@ -142,7 +143,8 @@ void entryCore0(void){
 	dbg_printf("DMX outputs are primed!\n");
 
 	/*INIT: setup i2c*/
-#if DEBUG != 3
+#if (DEBUG != 3)
+#ifndef NO_I2C
 	i2c_init(I2C_MAIN, I2C_BAUD);							//XXX: fast mode plus may not be supported on other devices
 	gpio_set_function(4, GPIO_FUNC_I2C);					//if I were smart I would put the pindefs BEFORE we use the pins
 	gpio_set_function(5, GPIO_FUNC_I2C);
@@ -174,6 +176,9 @@ void entryCore0(void){
 	ssd1306_contrast(&display, 30);									//XXX: I don't know the units for the contrast value FIXME:
 	ssd1306_clear(&display);
 	ssd1306_poweron(&display);										//display is now running
+#else
+	dbg_printf("****WARNING: I2C disabled!\n");
+#endif  /*defined(NO_I2C)*/
 #endif	/*DEBUG != 3*/
 	dbg_printf("I2C ready!\n");
 
@@ -227,13 +232,12 @@ void entryCore0(void){
 	/*INIT: interrupt time!*/
 	pio_sm_put(PIO_SHIFTS, 1, 0);							//send a pointless value at the last possible second
 	pio_sm_put(PIO_SHIFTS, 2, 0);							//just to get it all started
-	irq_add_shared_handler(PIO_SFT_IRQ, &triacInterrupt, 2);//when PIO_SHIFTS raises irq0 (more data needed)
-	irq_set_enabled(PIO_SFT_IRQ, true);
+	irq_set_exclusive_handler(PIO_SFT_IRQ, &triacInterrupt);//when PIO_SHIFTS raises irq0 (more data needed)
 	gpio_set_irq_enabled(GPIO_ZC, GPIO_IRQ_EDGE_FALL, true);	//enable the zero cross IRQ
-	irq_set_enabled(IO_IRQ_BANK0, true);
+//	irq_set_enabled(IO_IRQ_BANK0, true);
 	/*NOTE: this only allows us to have one GPIO interrupt [I think???]
 	comment the above line and uncomment the next one aswell as change the DMX/outputs.c/h*/
-//	gpio_set_irq_enabled_with_callback(GPIO_ZC, GPIO_IRQ_EDGE_FALL, true, &irq_DMX_onZero);
+	gpio_set_irq_enabled_with_callback(GPIO_ZC, GPIO_IRQ_EDGE_FALL, true, &irq_DMX_onZero);
 
 	irq_set_exclusive_handler(UART0_IRQ, &irq_DMX_onTXCompleate);
 	irq_set_enabled(UART0_IRQ, true);

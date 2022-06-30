@@ -67,17 +67,19 @@ void do_i2c_transmit(void){
 }
 
 /*Put these here because I'm not sure where they go*/
-void write_to_flash(uint32_t addr, const void* buf, size_t len){
+void __no_inline_not_in_flash_func(write_to_flash)(uint32_t addr, const void* buf, size_t len){
 	char blockCopy[FLASH_SECTOR_SIZE];		//should be small enough to be on the stack like this?
+	int interrupts;
+
 	for(uint32_t i=addr-(addr%FLASH_SECTOR_SIZE); i<=addr+len; i+=FLASH_SECTOR_SIZE){
 		read_from_flash(i, blockCopy, FLASH_SECTOR_SIZE);
 		memcpy(blockCopy+(addr%FLASH_SECTOR_SIZE), buf, len);
 		flash_range_erase(i, FLASH_SECTOR_SIZE);
-//		flash_range_program(i, blockCopy, FLASH_SECTOR_SIZE);
+		flash_range_program(i, blockCopy, FLASH_PAGE_SIZE);
 	}
 }
 
-void read_from_flash(uint32_t addr, void* buf, size_t len){
+void __no_inline_not_in_flash_func(read_from_flash)(uint32_t addr, void* buf, size_t len){
 	for(int i=0; i<len; i++){
 		((char*)buf)[i] = XIP_BASE+addr+i;
 	}
