@@ -36,8 +36,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 #NOCTRL				- allows control over the USB debug interface NOTE: does not disable the actual DMX interface
 target_compile_definitions(${PROJECT_NAME} PUBLIC DEBUG=2)
 target_compile_definitions(${PROJECT_NAME} PUBLIC NO_I2C=1)
-target_compile_definitions(${PROJECT_NAME} PUBLIC TIMING_DEBUG=1)
-target_compile_definitions(${PROJECT_NAME} PUBLIC ISRDEBUG=1)
+#target_compile_definitions(${PROJECT_NAME} PUBLIC TIMING_DEBUG=1)
+#target_compile_definitions(${PROJECT_NAME} PUBLIC ISRDEBUG=1)
 #target_compile_definitions(${PROJECT_NAME} PUBLIC NOCTRL)
 target_include_directories(${PROJECT_NAME} PRIVATE "./inc")
 

@@ -83,7 +83,9 @@ void entryCore1(void){
 
 	/*INIT: we could claim a DMA channel here, but I think we have enough processing time to use IRQs*/
 
-	/*INIT: use the builtin LED to show panic info without the display*/
+	/*INIT: use the builtin LED as a status indicator, and pull up the zero crossing a bit better*/
+	gpio_init(GPIO_ZC);
+	gpio_set_pulls(GPIO_ZC, true, false);
 	gpio_init(GPIO_LED);
 	gpio_set_dir(GPIO_LED, 1);
 	gpio_put(GPIO_LED, true);			//turn this on for now, we can flash on errors maybe
@@ -193,25 +195,25 @@ void entryCore0(void){
 	sm_config_set_set_pins(&pio_config, GPIO_SFT_RCK, 1);
 	sm_config_set_sideset_pins(&pio_config, GPIO_SFT_CLK);
 	pio_sm_set_consecutive_pindirs(PIO_SHIFTS, 0, 0, 32, true);
-	sm_config_set_clkdiv(&pio_config, 5.0);									//a divider of 5.0@125MHz = 25MHz clock
+	sm_config_set_clkdiv(&pio_config, 135.63f);									//a divider of 135.63@125MHz = 921.62501KHz clock (output 0.003% fast)
 	pio_sm_init(PIO_SHIFTS, 0, 0, &pio_config);
 	
-	pio_add_program_at_offset(PIO_SHIFTS, &SftOutsCtrl_program, 9);			//load the output program block @ addr 4
-	pio_config = SftOutsCtrl_program_get_default_config(9);
+	pio_add_program_at_offset(PIO_SHIFTS, &SftOutsCtrl_program, 12);			//load the output program block @ addr 4
+	pio_config = SftOutsCtrl_program_get_default_config(12);
 	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPA, 1);
-	sm_config_set_clkdiv(&pio_config, 5.0);
-	sm_config_set_fifo_join(&pio_config, PIO_FIFO_JOIN_TX);					//we don't read anything from here, so we can do this and write all of them at the same time
-	pio_sm_init(PIO_SHIFTS, 1, 9, &pio_config);								//this immediatly stops the clocks but whatever
+	sm_config_set_clkdiv(&pio_config, 5.0f);									//a divider of 5.0@125MHz = 25MHz clock
+	sm_config_set_fifo_join(&pio_config, PIO_FIFO_JOIN_TX);						//we don't read anything from here, so we can do this and write all of them at the same time
+	pio_sm_init(PIO_SHIFTS, 1, 12, &pio_config);								//this immediatly stops the clocks but whatever
 
-	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPB, 1);
-	pio_sm_init(PIO_SHIFTS, 2, 9, &pio_config);
+	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPB, 2);
+	pio_sm_init(PIO_SHIFTS, 2, 12, &pio_config);
 	
-	pio_add_program_at_offset(PIO_SHIFTS, &SftInsCtrl_program, 13);			//load the input program block
-	pio_config = SftInsCtrl_program_get_default_config(13);
+	pio_add_program_at_offset(PIO_SHIFTS, &SftInsCtrl_program, 16);			//load the input program block
+	pio_config = SftInsCtrl_program_get_default_config(16);
 	sm_config_set_in_pins(&pio_config, GPIO_DAT_BTN);
 	sm_config_set_in_shift(&pio_config, false, true, 8);
-	sm_config_set_clkdiv(&pio_config, 5.0);
-	pio_sm_init(PIO_SHIFTS, 3, 10, &pio_config);
+	sm_config_set_clkdiv(&pio_config, 5.0f);
+	pio_sm_init(PIO_SHIFTS, 3, 16, &pio_config);
 
 	//init the GPIOs for the pio module
 	pio_gpio_init(PIO_SHIFTS, GPIO_SFT_CLK);
@@ -219,6 +221,11 @@ void entryCore0(void){
 	pio_gpio_init(PIO_SHIFTS, GPIO_DAT_BTN);
 	pio_gpio_init(PIO_SHIFTS, GPIO_DAT_GPA);
 	pio_gpio_init(PIO_SHIFTS, GPIO_DAT_GPB);
+
+	pio_sm_set_pindirs_with_mask(PIO_SHIFTS, 0, 0x1F, 0x1F);
+	pio_sm_set_pindirs_with_mask(PIO_SHIFTS, 1, 0x1F, 0x1F);
+	pio_sm_set_pindirs_with_mask(PIO_SHIFTS, 2, 0x1F, 0x1F);
+	pio_sm_set_pindirs_with_mask(PIO_SHIFTS, 3, 0, 0x1F);		//this one takes inputs instead of outputs
 
 	pio_set_irq0_source_enabled(PIO_SHIFTS, pis_interrupt0, true);
 	pio_enable_sm_mask_in_sync(PIO_SHIFTS, 0xf);				//start the state machine clocks
@@ -232,13 +239,11 @@ void entryCore0(void){
 	/*INIT: interrupt time!*/
 	pio_sm_put(PIO_SHIFTS, 1, 0);							//send a pointless value at the last possible second
 	pio_sm_put(PIO_SHIFTS, 2, 0);							//just to get it all started
+	pio_set_irq0_source_enabled(PIO_SHIFTS, pis_interrupt0, true);		//route pio_shifts logical irq0 to arm interrupt PIO_SFT_IRQ
 	irq_set_exclusive_handler(PIO_SFT_IRQ, &triacInterrupt);//when PIO_SHIFTS raises irq0 (more data needed)
-	gpio_set_irq_enabled(GPIO_ZC, GPIO_IRQ_EDGE_FALL, true);	//enable the zero cross IRQ
-//	irq_set_enabled(IO_IRQ_BANK0, true);
-	/*NOTE: this only allows us to have one GPIO interrupt [I think???]
-	comment the above line and uncomment the next one aswell as change the DMX/outputs.c/h*/
-	gpio_set_irq_enabled_with_callback(GPIO_ZC, GPIO_IRQ_EDGE_FALL, true, &irq_DMX_onZero);
+	irq_set_enabled(PIO_SFT_IRQ, true);						//I've been debugging for 4 hours if this fixes it I am going to be angry
 
+	gpio_set_irq_enabled_with_callback(GPIO_ZC, GPIO_IRQ_EDGE_RISE, true, &irq_DMX_onZero);
 	irq_set_exclusive_handler(UART0_IRQ, &irq_DMX_onTXCompleate);
 	irq_set_enabled(UART0_IRQ, true);
 
@@ -268,6 +273,8 @@ void entryCore0(void){
 				printf("\t[f]ault <0-current | 1-temp> <0-pre | 1-err | 2-crit> <channel (RELITIVE)>\n");
 				printf("\t[a]ddress <new device base addr>\n");
 				printf("\t[g]etBaseAddr\n");
+				printf("\t[s]endPioReinit\n");
+				printf("\t\tif the pico is not powered by mains this needs to be called after appyling power\n");
 				break;
 			case 'i':
 				nextFeild = 0;
@@ -351,6 +358,12 @@ void entryCore0(void){
 				break;
 			case 'g':
 				printf("the current device base address is: %i\n", DMX_getBaseAddr());
+				break;
+			case 's':
+				pio_sm_put(PIO_SHIFTS, 1, 255);
+				pio_sm_put(PIO_SHIFTS, 2, 255);
+				printf("pio clock is hung at: 0x%4x\n", pio_sm_get_pc(PIO_SHIFTS, 0));
+				printf("reinitialized PIO blocks\n");
 		}
 #endif
 	}

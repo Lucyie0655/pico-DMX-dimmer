@@ -26,6 +26,9 @@ static long   i2c_nextTransmitTim[8];
 
 //XXX: if we want literly anything but our servos, this function and probably "DMX/outputs.c:setPCA()" will need to be entirely rewritten
 void isr1_fifo(void){
+#ifdef ISRDEBUG
+	dbg_printf("F");
+#endif
 	if(sio_hw->fifo_st & SIO_FIFO_ST_VLD_BITS){		//only if we received data
 		for(int i=0; i<32; i+=4){
 			if(multicore_fifo_pop_timeout_us(10, (uint32_t*)servoData+i) == false){			//this casts servoData to a uint32, and then we skip one uint32 worth of servoData

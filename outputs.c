@@ -11,7 +11,7 @@
 
 static uint16_t triacTiming[256];	//save every possible timing in order as a bitmap of what to turn on
 uint16_t nextPIOOut;
-uint8_t ACLockout;				//used by the monitoring, do not allow the channel to go higher if channel is locked out (bitfield)
+uint8_t ACLockout;					//used by the monitoring, do not allow the channel to go higher if channel is locked out (bitfield)
 
 void setTriacs(char* data, size_t len, uint64_t lockout){
 	nextPIOOut = 0;
@@ -33,10 +33,13 @@ because of that this needs to stay really short to work
 the only blocking is the phase correct, and keep conditional logic to a minimum
 */
 void __irq triacInterrupt(void){
-	while(nextPIOOut >= 256);		//steps are 0-255, reset by irq_DMX_onZero()
+#ifdef ISRDEBUG
+	dbg_printf("T");
+#endif
+	while((volatile uint16_t)nextPIOOut >= 256);		//steps are 0-255, reset by irq_DMX_onZero()
 
-	pio_sm_put(PIO_SHIFTS, 0, (char)triacTiming[nextPIOOut]);
-	pio_sm_put(PIO_SHIFTS, 1, (char)0);
+	pio_sm_put(PIO_SHIFTS, 1, (char)triacTiming[nextPIOOut]);
+	pio_sm_put(PIO_SHIFTS, 2, (char)(triacTiming[nextPIOOut] >> 8));
 
 	/*
 	I leave this next line out of shame

@@ -71,10 +71,12 @@ void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
 
 	//FIXME: every time this is executed ther is a roughly 1/10,000 chance that we desync the shift register
 	if(nextPIOOut < 256){
+
 #ifdef TIMING_DEBUG
 #warning "TIMING_DEBUG causes prints from an ISR, be careful when using"
 		dbg_printf("%hi\n",nextPIOOut);
 #endif /*TIMING_DEBUG*/
+
 		pio_sm_exec(PIO_SHIFTS, 1, 9);		//jmp 9
 		pio_sm_exec(PIO_SHIFTS, 2, 9);		//jmp 9
 		pio_sm_exec(PIO_SHIFTS, 3, 13);		//jmp 13
@@ -89,6 +91,9 @@ void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
 }
 
 void __irq irq_DMX_onTXCompleate(void){			//triggers on line break (DMX packet begin)
+#ifdef ISRDEBUG
+	dbg_printf("D");
+#endif
 	dma_channel_abort(DMA_DMX_RX);				//kill the transfer if the controller did not send a full packet (this method blocks)
 	dma_channel_start(DMA_DMX_RX);				//restart this for the next transfer
 }
@@ -158,7 +163,6 @@ ARGUMENTS:
 	num - the number of addresses you need
 	updateTime - how often your output gets updated (in incriments of 1/60 of a second)
 	setRoutine - your routine to call every time we update your outputs
-	info - common between all calls
 RETURN:
 	number of channels you actually got or -1 on error
 */

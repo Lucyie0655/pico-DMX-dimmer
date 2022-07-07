@@ -24,6 +24,9 @@ extern volatile char DMX_data[512];		//from DMX.c
 extern uint8_t systemError;				//from ctrl/display.c
 
 void irq_MON_ADC(void){
+#ifdef ISRDEBUG
+	dbg_printf("A");
+#endif
 	//TODO: current should be RMS over about 10 seconds and temperature should be mean averaged over about a second
 	//to prevent the error mentioned on page 589 of the RP2040 datasheet
 	//(error peaks every 2^9 samples)
