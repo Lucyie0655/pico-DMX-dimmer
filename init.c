@@ -195,7 +195,7 @@ void entryCore0(void){
 	sm_config_set_set_pins(&pio_config, GPIO_SFT_RCK, 1);
 	sm_config_set_sideset_pins(&pio_config, GPIO_SFT_CLK);
 	pio_sm_set_consecutive_pindirs(PIO_SHIFTS, 0, 0, 32, true);
-	sm_config_set_clkdiv(&pio_config, 135.63f);									//a divider of 135.63@125MHz = 921.62501KHz clock (output 0.003% fast)
+	sm_config_set_clkdiv(&pio_config, 107.08f);									//a divider of 135.63@125MHz = 921.62501KHz clock (output 0.003% fast)
 	pio_sm_init(PIO_SHIFTS, 0, 0, &pio_config);
 	
 	pio_add_program_at_offset(PIO_SHIFTS, &SftOutsCtrl_program, 12);			//load the output program block @ addr 4
@@ -203,9 +203,11 @@ void entryCore0(void){
 	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPA, 1);
 	sm_config_set_clkdiv(&pio_config, 5.0f);									//a divider of 5.0@125MHz = 25MHz clock
 	sm_config_set_fifo_join(&pio_config, PIO_FIFO_JOIN_TX);						//we don't read anything from here, so we can do this and write all of them at the same time
-	pio_sm_init(PIO_SHIFTS, 1, 12, &pio_config);								//this immediatly stops the clocks but whatever
+	sm_config_set_out_shift(&pio_config, true, false, 8);						//configure autopull so that we always take exactly one char in
+	sm_config_set_out_special(&pio_config, true, false, 0);						//re-assert the out signal while holding for the clock
+	pio_sm_init(PIO_SHIFTS, 1, 12, &pio_config);
 
-	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPB, 2);
+	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPB, 1);
 	pio_sm_init(PIO_SHIFTS, 2, 12, &pio_config);
 	
 	pio_add_program_at_offset(PIO_SHIFTS, &SftInsCtrl_program, 16);			//load the input program block
@@ -244,15 +246,19 @@ void entryCore0(void){
 	irq_set_enabled(PIO_SFT_IRQ, true);						//I've been debugging for 4 hours if this fixes it I am going to be angry
 
 	gpio_set_irq_enabled_with_callback(GPIO_ZC, GPIO_IRQ_EDGE_RISE, true, &irq_DMX_onZero);
+	irq_set_priority(IO_IRQ_BANK0, 0);						//the zero cross is the main timing method so it needs to take priority over everything
 	irq_set_exclusive_handler(UART0_IRQ, &irq_DMX_onTXCompleate);
 	irq_set_enabled(UART0_IRQ, true);
 
 	while(1){
 #ifndef NOCTRL
+		irq_set_enabled(UART0_IRQ, false);
+		uart_deinit(DMX_UART);								//if we have no control this can only get in our way
+
 		static char debugString[32];						//we need some way of debugging since I don't have my own DMX controller
 		char nextFeild;										//note that I left you no comments when writting this so just leave this alone; it works :)
 		int debugAddr, debugValue;
-		extern volatile char DMX_data[512];
+		extern DMX_info DMX_data;
 
 		printf("enter a command or h for help> ");
 		for(int i=0; i<32; i++){
@@ -273,6 +279,7 @@ void entryCore0(void){
 				printf("\t[f]ault <0-current | 1-temp> <0-pre | 1-err | 2-crit> <channel (RELITIVE)>\n");
 				printf("\t[a]ddress <new device base addr>\n");
 				printf("\t[g]etBaseAddr\n");
+				printf("\ti[n]vertAllChannels\n");
 				printf("\t[s]endPioReinit\n");
 				printf("\t\tif the pico is not powered by mains this needs to be called after appyling power\n");
 				break;
@@ -288,14 +295,14 @@ void entryCore0(void){
 					}
 				}
 				if(debugAddr >= 0 && debugAddr <= 512)
-					DMX_data[debugAddr] = (char)debugValue;
+					DMX_data.intens[debugAddr] = (char)debugValue;
 				printf("executed set %i at %i\n", debugAddr, debugValue);
 				break;
 			case 'm':
 				for(int i=1; i<=strlen(debugString); i++){
 					if(debugString[i-1] == ' '){
 						debugAddr = strtol(debugString+i, NULL, 10);
-						DMX_data[debugAddr] = 255;
+						DMX_data.intens[debugAddr] = 255;
 						printf("executed full intensity on address %i\n", debugAddr);
 						break;
 					}
@@ -305,7 +312,7 @@ void entryCore0(void){
 				for(int i=1; i<=strlen(debugString); i++){
 					if(debugString[i-1] == ' '){
 						debugAddr = strtol(debugString+i, NULL, 10);
-						DMX_data[debugAddr] = 0;
+						DMX_data.intens[debugAddr] = 0;
 						printf("executed out on address %i\n", debugAddr);
 						break;
 					}
@@ -359,11 +366,19 @@ void entryCore0(void){
 			case 'g':
 				printf("the current device base address is: %i\n", DMX_getBaseAddr());
 				break;
+			case 'n':
+				for(int i=0; i<512; i++){
+					DMX_data.intens[i] ^= 0xFF;
+				}
+				printf("all outputs at opposite extreme\n");
+				break;
 			case 's':
 				pio_sm_put(PIO_SHIFTS, 1, 255);
 				pio_sm_put(PIO_SHIFTS, 2, 255);
-				printf("pio clock is hung at: 0x%4x\n", pio_sm_get_pc(PIO_SHIFTS, 0));
 				printf("reinitialized PIO blocks\n");
+				break;
+			default:
+				printf("invalid command!\n");
 		}
 #endif
 	}

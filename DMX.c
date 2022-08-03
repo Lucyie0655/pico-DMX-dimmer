@@ -26,20 +26,19 @@ functions:
 
 
 //this is where all of the data goes, stores the DMX command and 511 channels
-volatile char __volvar DMX_data[512] __attribute__((aligned(512)));
-static DMX_info __nvolvar info;
+DMX_info __nvolvar DMX_data;
 static char __volvar halfWave;
 
 extern uint16_t nextPIOOut;		//from ./outputs.c; used to sync to AC cycle
 
 static inline bool isChanLocked(uint8_t channel){
-	return !!(info.lockedChan[channel/64] && channel);
+	return !!(DMX_data.lockedChan[channel/64] && channel);
 }
 static inline void unlockChan(uint8_t channel){
-	info.lockedChan[channel/64] &=~ (channel%64);
+	DMX_data.lockedChan[channel/64] &=~ (channel%64);
 }
 static inline void lockChan(uint8_t channel){
-	info.lockedChan[channel/64] |= (channel%64);
+	DMX_data.lockedChan[channel/64] |= (channel%64);
 }
 
 void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
@@ -47,7 +46,7 @@ void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
 	dbg_printf("z");
 #endif /*ISRDEBUG*/
 	uint16_t dataOff;				//points to the first DMX addr used by this handler
-	dataOff = info.baseAddr;		//the first address assigned to us
+	dataOff = DMX_data.baseAddr;		//the first address assigned to us
 
 	//NOTE: if you are leanring programming, pre incriment/decriment is the absolute worst operator
 	//this is the only time I have used it and I try to avoid it if I possibly can.
@@ -55,15 +54,15 @@ void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
 	++halfWave < 0 ? halfWave = 0 : halfWave;		//if we will overflow, reset the count just in time
 
 #ifdef NO_TSK_SWITCH
-	for(int i=0; i<info.nextOut; i++){				//call all of the handlers to fire here
-		if(halfWave % info.updateTime[i] == 0){
-			info.routines[i](
-							info.intens+dataOff,
-							info.noAddrs[i], 
-							info.lockedChan[(dataOff-info.baseAddr)/64] >> (dataOff-info.baseAddr)%64
+	for(int i=0; i<DMX_data.nextOut; i++){				//call all of the handlers to fire here
+		if(halfWave % DMX_data.updateTime[i] == 0){		//but only if they are ready to right now
+			DMX_data.routines[i](
+							DMX_data.intens+dataOff,
+							DMX_data.noAddrs[i], 
+							DMX_data.lockedChan[(dataOff-DMX_data.baseAddr)/64] >> (dataOff-DMX_data.baseAddr)%64
 							);	//call your handler with data[0] being your first address and the number of addresses you have to set
 		}
-		dataOff += info.noAddrs[i];					//'almost' a linked list
+		dataOff += DMX_data.noAddrs[i];					//'almost' a linked list
 	}
 #else /*NO_TSK_SWITCH*/
 	//TODO: set some flag so we can call the handlers outside of an interrupt
@@ -127,31 +126,32 @@ void DMX_init(void){
 
 	dma_channel_configure(DMA_DMX_RX, 
 						&dma_config, 
-						DMX_data, 
+						DMX_data.pan, 
 						&uart_get_hw(DMX_UART)->dr, 
 						512, 
 						false
 						);		//set channel 0 to constantly read from uart0 into DMX_values
 	
-	memset(&info, 0, sizeof(info));			//clear out dmx info first
+	memset(&DMX_data, 0, sizeof(DMX_data));			//clear out dmx DMX_data first
+	assert(DMX_data[0] == DMX_data.intens[0]);
 
 	//read the stored DMX address
-	read_from_flash(FLASH_DMX_ADDR, (uint8_t*)&info.baseAddr, sizeof(info.baseAddr));
+	read_from_flash(FLASH_DMX_ADDR, (uint8_t*)&DMX_data.baseAddr, sizeof(DMX_data.baseAddr));
 
 	irq_add_shared_handler(IRQ_DMX_RX, &irq_DMX_onTXCompleate, 0);		//this should be one of the most important handlers
 }
 
 /*
 DMX_setBaseAddr/DMX_getBaseAddr() - allows access to the first DMX address
-just a macro but we can't inline this or pre-process this becuse info is static to DMX.c
+just a macro but we can't inline this or pre-process this becuse DMX_data is static to DMX.c
 */
 void DMX_setBaseAddr(int addr){
-	info.baseAddr = addr;
+	DMX_data.baseAddr = addr;
 /*TODO: write_to_flash is broken so someone needs to fix it*/
-//	write_to_flash(FLASH_DMX_ADDR, &info.baseAddr, sizeof(info.baseAddr));
+//	write_to_flash(FLASH_DMX_ADDR, &DMX_data.baseAddr, sizeof(DMX_data.baseAddr));
 }
 int DMX_getBaseAddr(void){
-	return info.baseAddr;
+	return DMX_data.baseAddr;
 }
 
 /*
@@ -176,21 +176,27 @@ int DMX_registerOutputs(uint8_t base, uint8_t num, uint8_t updateTime, void (*se
 	//XXX: does base even do anything anymore?
 	//TODO/XXX: find if we are overlapping anything
 
-	if(info.nextOut > 31){
+	if(DMX_data.nextOut > 31){
 		printf("****ERROR: Cannot allocate any more handlers\r\n");
 		return -1;
 	}
 
 	//load into the struct; NOTE: the base doesn't actually do anything but a sanity check
-	info.updateTime[info.nextOut] = updateTime;		//in half waves
-	info.routines[info.nextOut] = setRoutine;			//routine to set value
-	info.noAddrs[info.nextOut] = num;					//amount of addrs we have used
-	info.totalAddrs += num;
+	DMX_data.updateTime[DMX_data.nextOut] = updateTime;		//in half waves
+	DMX_data.routines[DMX_data.nextOut] = setRoutine;			//routine to set value
+	DMX_data.noAddrs[DMX_data.nextOut] = num;					//amount of addrs we have used
+	DMX_data.totalAddrs += num;
 
-	info.nextOut++;
-	return info.noAddrs[info.nextOut-1];
+	DMX_data.nextOut++;
+	return DMX_data.noAddrs[DMX_data.nextOut-1];
 }
 
+int DMX_lockoutChan(int i){
+	DMX_data.lockedChan[i/64] |= 1 << (i%64);
+}
+int DMX_unlockChan(int i){
+	DMX_data.lockedChan[i/64] &=~ 1 << (i%64);
+}
 
 /*
 DMX_readButtons() - reads the front pannel buttons and acts accordingly
@@ -226,34 +232,34 @@ int DMX_readButtons(){
 	switch(currentSetInfo.setMode){
 		case 1:			//set address
 			if(buttonWasPressed & BUTTON_PLUS100){
-				if(info.baseAddr >= 500)		//if the address is already over 500, wrap around
-					info.baseAddr -= 500;
+				if(DMX_data.baseAddr >= 500)		//if the address is already over 500, wrap around
+					DMX_data.baseAddr -= 500;
 				else
-					info.baseAddr += 100;
+					DMX_data.baseAddr += 100;
 			}
 			if(buttonWasPressed & BUTTON_PLUS10){
-				if((info.baseAddr % 100) >= 90)	//don't change the 100's digit
-					info.baseAddr -= 90;
+				if((DMX_data.baseAddr % 100) >= 90)	//don't change the 100's digit
+					DMX_data.baseAddr -= 90;
 				else
-					info.baseAddr += 10;
+					DMX_data.baseAddr += 10;
 
-				if(info.baseAddr > 512-info.totalAddrs)		//if we are running past the end of the universe
-					info.baseAddr -= 10;
+				if(DMX_data.baseAddr > 512-DMX_data.totalAddrs)		//if we are running past the end of the universe
+					DMX_data.baseAddr -= 10;
 			}
 			if(buttonWasPressed & BUTTON_PLUS1){
-				if((info.baseAddr % 10) >= 9)		//don't change the 100's digit
-					info.baseAddr -= 9;
+				if((DMX_data.baseAddr % 10) >= 9)		//don't change the 100's digit
+					DMX_data.baseAddr -= 9;
 				else
-					info.baseAddr += 1;
+					DMX_data.baseAddr += 1;
 
-				if(info.baseAddr > 512-info.totalAddrs)		//if we are running past the end of the universe
-					info.baseAddr -= 1;
+				if(DMX_data.baseAddr > 512-DMX_data.totalAddrs)		//if we are running past the end of the universe
+					DMX_data.baseAddr -= 1;
 			}
 
 			if(buttonWasPressed & BUTTON_CONFIRM){
 				currentSetInfo.setMode = 0;
-				triacSetBase(info.baseAddr);
-				write_to_flash(0x100FFFF0, &(info.baseAddr), sizeof(info.baseAddr));
+				triacSetBase(DMX_data.baseAddr);
+				write_to_flash(0x100FFFF0, &(DMX_data.baseAddr), sizeof(DMX_data.baseAddr));
 			}
 			break;
 		case 2:			//channel off

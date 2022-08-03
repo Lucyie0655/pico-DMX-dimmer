@@ -8,21 +8,23 @@
 #include <outputs.h>
 #include <resources.h>
 #include <DMX.h>
+#include <string.h>
 
 static uint16_t triacTiming[256];	//save every possible timing in order as a bitmap of what to turn on
 uint16_t nextPIOOut;
-uint8_t ACLockout;					//used by the monitoring, do not allow the channel to go higher if channel is locked out (bitfield)
 
 void setTriacs(char* data, size_t len, uint64_t lockout){
 	nextPIOOut = 0;
+	memset(triacTiming, 0, 512);	//clear out all of the old timing info
 
-	for(int i=0; i<8; i++){			//order the stuff into our 256 different outputs
-		if(!(ACLockout && 1 << i) && !(lockout && 1 << i)){	//if we are not locked out
-			triacTiming[data[i]] |= i;
-			if(len == 16){			//we don't have monitoring or locks for the off-board stuff
-				triacTiming[data[i]] |= (i << 8);
-			}
-		}
+	for(int i=0; i<len; i++){		//order the stuff into our 256 different output timings
+#if 1
+//		if(!(lockout && 1 << i)){	//if we are not locked out
+			triacTiming[256-data[i]] |= (1 << i);		//earlier turn on means higher power, so we need to reverse-map this
+//		}
+#else
+		triacTiming[0] = 0xFF;
+#endif
 	}
 }
 
@@ -41,17 +43,8 @@ void __irq triacInterrupt(void){
 	pio_sm_put(PIO_SHIFTS, 1, (char)triacTiming[nextPIOOut]);
 	pio_sm_put(PIO_SHIFTS, 2, (char)(triacTiming[nextPIOOut] >> 8));
 
-	/*
-	I leave this next line out of shame
-	the register is write 1 to clear
-	always RTFM
-	(the next person here could remove this if you want)
-
-	-Lucas
-	*/
-//XXX:	PIO_SHIFTS->irq &= ~1;				//clear the interrupt we just used
-	PIO_SHIFTS->irq |= 1;
 	nextPIOOut++;
+	PIO_SHIFTS->irq |= 1;								//let the PIO continue
 }
 
 void __irq setPCA(char* data, size_t len, uint64_t lockout){	//XXX: if you ever need another PCA a lot of this function should be rewritten

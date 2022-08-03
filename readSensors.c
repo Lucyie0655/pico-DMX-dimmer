@@ -20,7 +20,7 @@ static uint8_t triacBase;		//the first DMX addr that is a triac
 static uint8_t triacVals[8];	//the actual values that the triacs are set to (more accurate than DMX_data)
 static uint8_t isLockedOut;		//keep our own record of what is locked out
 
-extern volatile char DMX_data[512];		//from DMX.c
+extern DMX_info DMX_data;		//from DMX.c
 extern uint8_t systemError;				//from ctrl/display.c
 
 void irq_MON_ADC(void){
@@ -68,28 +68,28 @@ void irq_MON_ADC(void){
 
 void pre_lim_temp(int i){		//do I even need this?
 	if(i <= 8){
-		if(90 <= DMX_data[triacBase+i] < 100)	//full conducion is better than partial conduction
-			DMX_data[triacBase+i] = 100;
-		else if(0 < DMX_data[triacBase+i] <= 50)	//otherwise lower-voltage switching is better
-			DMX_data[triacBase+i] -= DMX_data[triacBase+i] % 10;
-		else if(DMX_data[triacBase+i] > 50)		//round to ten, do not turn off
-			DMX_data[triacBase+i] += DMX_data[triacBase+i] % 10;
+		if(90 <= DMX_data.intens[triacBase+i] < 100)	//full conducion is better than partial conduction
+			DMX_data.intens[triacBase+i] = 100;
+		else if(0 < DMX_data.intens[triacBase+i] <= 50)	//otherwise lower-voltage switching is better
+			DMX_data.intens[triacBase+i] -= DMX_data.intens[triacBase+i] % 10;
+		else if(DMX_data.intens[triacBase+i] > 50)		//round to ten, do not turn off
+			DMX_data.intens[triacBase+i] += DMX_data.intens[triacBase+i] % 10;
 	}
 }
 void pre_lim_current(int i){}
 void err_lim_temp(int i){
 	if(i < 8){
-		if(DMX_data[triacBase+i] >= triacVals[i]){
+		if(DMX_data.intens[triacBase+i] >= triacVals[i]){
 			if(!(isLockedOut && 1 << i)){
 				printf("****WARNING: tried to increase channel while at temp limit\n");
 				setTriacs(triacVals, 8, 0);
-				triacLockout(i);			//don't let the DMX increase the output while at our limit
+				DMX_lockoutChan(i);			//don't let the DMX increase the output while at our limit
 				isLockedOut |= (1 << i);
 				systemError = 0xE8;			//I'm making these up as I go, so they are going to seem pretty random
 			}
 		}
 		else{
-			triacUnlock(i);				//if we try to go down it is all good again
+			DMX_unlockChan(i);				//if we try to go down it is all good again
 			isLockedOut &= ~(1 << i);
 			systemError = 0;			//clear error
 		}
@@ -103,36 +103,36 @@ void err_lim_temp(int i){
 }
 void err_lim_current(int i){
 	if(i < 8){				//actual channel
-		if(DMX_data[triacBase+i] > triacVals[i]){		//if we try to go up
+		if(DMX_data.intens[triacBase+i] > triacVals[i]){		//if we try to go up
 			if(!(isLockedOut && 1 << i)){
 				printf("****WARNING: tried to increase channel while at channel current limit\n");
 				setTriacs(triacVals, 8, 0);					//this call makes it practically impossible to false bump this
 				//and impossible if you concider the USB poll of the desk keyboard
-				triacLockout(1 << i);						//and take control of this
+				DMX_lockoutChan(1 << i);						//and take control of this
 				isLockedOut |= (1 << i);
 				systemError = 0xEA;				//every error will be even
 			}
 		}
-		else if(DMX_data[triacBase+i] < triacVals[i]){
-			triacUnlock(1 << i);						//we want to turn down the current, that's fine
+		else if(DMX_data.intens[triacBase+i] < triacVals[i]){
+			DMX_unlockChan(1 << i);						//we want to turn down the current, that's fine
 			isLockedOut &= ~(1 << i);
 			systemError = 0;
 		}
 	}
 	else{					//lock all of them
 		for(int j=0; j<8; j++){
-			if(DMX_data[triacBase+j] > triacVals[j]){
+			if(DMX_data.intens[triacBase+j] > triacVals[j]){
 				if(!(isLockedOut && 1 << i)){
 					printf("****WARNING: tried to increase channel while at device current limit\n");
 					setTriacs(triacVals, 8, 0);
-					triacLockout(0xFF);						//mask all of them locked
+					DMX_lockoutChan(0xFF);						//mask all of them locked
 					isLockedOut |= (1 << i);
 					systemError = 0xEC;			//I am going to put a comment on every one of these
 				}
 			}
-			else if(DMX_data[triacBase+j] < triacVals[j]){
+			else if(DMX_data.intens[triacBase+j] < triacVals[j]){
 				//non-critical function just let us change all of them again
-				triacUnlock(0xFF);
+				DMX_unlockChan(0xFF);
 				isLockedOut &= ~(1 << i);
 				systemError = 0;
 			}
@@ -145,7 +145,7 @@ void crit_lim_temp(int i){
 		if(!(isLockedOut && 1 << i)){
 			triacVals[i] = 0;			//shut down the channel completely
 			setTriacs(triacVals, 8, 0);
-			triacLockout(1 << i);
+			DMX_lockoutChan(1 << i);
 			isLockedOut |= (1 << i);
 			systemError = 0xFA;					//0xFx errors are now critical
 		}
@@ -173,7 +173,7 @@ void crit_lim_current(int i){
 		if(!(isLockedOut && 1 << i)){
 			triacVals[i] = 0;			//turn off the overloaded channel
 			setTriacs(triacVals, 8, 0);
-			triacLockout(1 << i);
+			DMX_lockoutChan(1 << i);
 			isLockedOut |= (1 << i);
 			systemError = 0xFC;					//last one
 		}
@@ -182,7 +182,7 @@ void crit_lim_current(int i){
 		if(!(isLockedOut && 1 << i)){
 			*(uint64_t*)triacVals = 0;		//turn off all of the triacs in one line (8 chars)
 			setTriacs(triacVals, 8, 0);
-			triacLockout(0xFF);				//shut it all down
+			DMX_lockoutChan(0xFF);				//shut it all down
 			isLockedOut = 0xFF;
 		}
 	}
@@ -231,7 +231,7 @@ finishReadLim:
 //		dbg_printf("current %i: %i\n", i, current[i]);
 //		dbg_printf("temp %i: %i\n", i, temp[i]);
 		current_sum += current[i];		//keep a running tally
-		triacVals[i] = DMX_data[triacBase+i];		//update the real values; note that the get is after the limit calls
+		triacVals[i] = DMX_data.intens[triacBase+i];		//update the real values; note that the get is after the limit calls
 	}
 
 //	dbg_printf("total current: %i\n", current_sum);
@@ -254,20 +254,20 @@ finishReadLim:
 		for(int i=0; i<8; i++){
 			//if the channel is locked out AND the channel is set to 0 AND the channel is not overheating (err level)
 			if((isLockedOut && (1 << i)) && 
-						(DMX_data[triacBase+i] == 0) &&
+						(DMX_data.intens[triacBase+i] == 0) &&
 						(temp[i] <= 85)){
 				isLockedOut &= ~(1 << i);
-				triacUnlock(1 << i);
+				DMX_unlockChan(1 << i);
 				systemError = 0;
 			}
 		}
 	}
 	else if(isLockedOut){		//if the entire device is locked out, we can assume it a current issue
 		for(int i=0; i<8; i++){
-			if(DMX_data[triacBase+i] != 0)
+			if(DMX_data.intens[triacBase+i] != 0)
 				return;			//this is the last part of the function, so just return early
 		}
-		triacUnlock(0xFF);
+		DMX_unlockChan(0xFF);
 		systemError = 0;
 	}
 

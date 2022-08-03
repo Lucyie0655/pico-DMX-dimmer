@@ -1,4 +1,4 @@
-.program SftOutsCtrl		; 4 instructions
+.program SftOutsCtrl		; 2 instructions
 
 	;note that we will see some different stuff from what you might expect
 	;when we have no new data waiting,
@@ -28,7 +28,7 @@
 		push				; send it to the system (but don't block if we can't)
 	.wrap
 
-.program SftClkCtrl			; 12 instructions
+.program SftClkCtrl			; 9 instructions
 .side_set 1 opt
 	mov X, NULL
 
@@ -36,7 +36,7 @@
 		set Y, 7
 		SftClkLoop:
 			wait 1 irq 5 SIDE 0		; wait for the TRIACs to be ready; set the clock line low here
-			irq clear 5
+			irq clear 5				; XXX: WHY DID THIS FIX IT???
 			wait 1 irq 6			; wait for the GPB to be ready
 			irq clear 6
 			wait 1 irq 7 SIDE 1		; wait for the buttons to be ready

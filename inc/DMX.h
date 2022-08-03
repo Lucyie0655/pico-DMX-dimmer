@@ -31,10 +31,9 @@ typedef struct {			//656 bytes
 	union {		//I just named these for some random use case, just different ways of acessing the DMX data
 		uint8_t intens[512];
 		uint16_t strobe[256];
-		int8_t pan[512];	//again, just some use cases
+		volatile int8_t pan[512];	//this is the only one marked volatile so we can increase efficiancy because it rarely maters that this is volatile
 		int16_t tilt[256];	//in any real light this would match the data type of pan
-	} __attribute__((aligned(512
-	)));
+	} __attribute__((aligned(512)));
 	void (*routines[16])(char*, size_t, uint64_t);	//XXX: FIXME: NOTE: these are called from an ISR when we are not in TASK_SWITCH mode; therefore these need to be fast
 	//^^ this is actually intended not fixme, but it is so important that I want it to be rainbow in your IDE
 } DMX_info;
@@ -52,6 +51,8 @@ void DMX_receive(void);
 
 int DMX_registerOutputs(uint8_t base, uint8_t num, uint8_t updateTime, void (*setRoutine)(char*, size_t, uint64_t));
 
+int DMX_lockoutChan(int i);
+int DMX_unlockChan(int i);
 
 #define BUTTON_PLUS1	1
 #define BUTTON_PLUS10	2
