@@ -13,6 +13,9 @@
 /*DMA mappings*/
 #define DMA_DMX_RX 0				//keep these in sync
 #define IRQ_DMX_RX DMA_IRQ_0		//otherwise you will break it terribly
+
+#define DMA_TRIAC_1 1				//triacs need 2 DMA channels
+#define DMA_TRIAC_2 2
 //#define DMA_DMX_TX 1
 //#define DMA_I2C_RX 1
 //#define DMA_I2C_TX 2

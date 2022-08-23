@@ -4,6 +4,12 @@
 #include <rtos.h>
 #include <resources.h>
 
+#define SERVO_UPDATE_TIME 	5		//unit 1/120th of a second
+#define TRIAC_UPDATE_TIME 	10
+
+void initTriacs();
+void initPCA();
+
 void setTriacs(char*, size_t, uint64_t);
 void setPCA(char*, size_t, uint64_t);
 void triacInterrupt(void);

@@ -29,8 +29,6 @@ functions:
 DMX_info __nvolvar DMX_data;
 static char __volvar halfWave;
 
-extern uint16_t nextPIOOut;		//from ./outputs.c; used to sync to AC cycle
-
 static inline bool isChanLocked(uint8_t channel){
 	return !!(DMX_data.lockedChan[channel/64] && channel);
 }
@@ -45,8 +43,17 @@ void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
 #ifdef ISRDEBUG
 	dbg_printf("z");
 #endif /*ISRDEBUG*/
+	extern char triacTiming[512];
 	uint16_t dataOff;				//points to the first DMX addr used by this handler
 	dataOff = DMX_data.baseAddr;		//the first address assigned to us
+
+	//dispatch DMA as soon as possible
+	//NOTE: since we start DMA before channel updates there may be artifacts around the time of switching but it should be unoticable with 500+ watt incandecent lights
+	dma_channel_abort(DMA_TRIAC_1);		//kill the current transfer and restart
+	dma_channel_abort(DMA_TRIAC_2);
+	dma_channel_set_read_addr(DMA_TRIAC_1, triacTiming, true);	//reset the read address every time
+	dma_channel_set_read_addr(DMA_TRIAC_2, triacTiming+256, true);
+
 
 	//NOTE: if you are leanring programming, pre incriment/decriment is the absolute worst operator
 	//this is the only time I have used it and I try to avoid it if I possibly can.
@@ -67,26 +74,6 @@ void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
 #else /*NO_TSK_SWITCH*/
 	//TODO: set some flag so we can call the handlers outside of an interrupt
 #endif /*NO_TSK_SWITCH*/
-
-	//FIXME: every time this is executed ther is a roughly 1/10,000 chance that we desync the shift register
-	if(nextPIOOut < 256){
-
-#ifdef TIMING_DEBUG
-#warning "TIMING_DEBUG causes prints from an ISR, be careful when using"
-		dbg_printf("%hi\n",nextPIOOut);
-#endif /*TIMING_DEBUG*/
-
-		pio_sm_exec(PIO_SHIFTS, 1, 9);		//jmp 9
-		pio_sm_exec(PIO_SHIFTS, 2, 9);		//jmp 9
-		pio_sm_exec(PIO_SHIFTS, 3, 13);		//jmp 13
-	}
-
-/*	while(nextPIOOut < 256){		//send the PIO the rest of the data it needs
-		pio_sm_put(PIO_SHIFTS, 0, (char)0);
-		pio_sm_put(PIO_SHIFTS, 1, (char)0);
-		nextPIOOut++;
-	}*/
-	nextPIOOut = 0;					//reset the count for the PIO irq
 }
 
 void __irq irq_DMX_onTXCompleate(void){			//triggers on line break (DMX packet begin)

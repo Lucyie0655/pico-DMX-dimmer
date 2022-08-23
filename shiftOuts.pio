@@ -8,12 +8,8 @@
 	;NOTE: this runs on SM 1 and 2 so 'irq 4 rel' is irq 5 or irq 6
 
 	.wrap_target
-		pull BLOCK			; grab any new data we may have received from the system
-
-		SftOutLoop:
-			out PINS, 1		; output the TRIAC and GPB data
-			irq wait 4 rel	; set irqs to indicate to the clock module that we are ready; don't continue until we have clocked this out
-			jmp !OSRE SftOutLoop ; keep going until there is nothing left
+		out PINS, 1			; output the TRIAC and GPB data
+		irq wait 4 rel		; set irqs to indicate to the clock module that we are ready; don't continue until we have clocked this out
 	.wrap
 
 .program SftInsCtrl			; 6 instructions
@@ -23,26 +19,25 @@
 		set Y, 7
 		SftInLoop:
 			irq wait 4 rel [1]  	; this really doesn't want to be relitive, because we only have one button SM
-			in PINS, 1		; input the button data after we clock the register
-			jmp Y-- SftInLoop ; keep going until there is nothing left
-		push				; send it to the system (but don't block if we can't)
+			in PINS, 1				; input the button data after we clock the register
+			jmp Y-- SftInLoop 		; keep going until there is nothing left
+		push noblock				; send it to the system (but don't block if we can't)
 	.wrap
 
-.program SftClkCtrl			; 9 instructions
+.program SftClkCtrl			; 11 instructions
 .side_set 1 opt
 	mov X, NULL
 
 	.wrap_target
 		set Y, 7
+		set PINS, 0					; clear RCLK
 		SftClkLoop:
 			wait 1 irq 5 SIDE 0		; wait for the TRIACs to be ready; set the clock line low here
-			irq clear 5				; XXX: WHY DID THIS FIX IT???
+			irq clear 5				; XXX: wait irq is supposed to clear the irq but clearly it doesn't
 			wait 1 irq 6			; wait for the GPB to be ready
 			irq clear 6
 			wait 1 irq 7 SIDE 1		; wait for the buttons to be ready
 			irq clear 7
 			jmp Y--, SftClkLoop 	; jump and clock the register at the same time
-		set PINS, 1			; set RCLK
-		irq wait 0 			; tell the system that the transfer is complete, wait for more data
-		set PINS, 0			; clear RCLK
+		set PINS, 1					; set RCLK
 	.wrap

@@ -13,8 +13,8 @@
 #include <monitoring.h>
 #include <outputs.h>
 
-char current[8];
-char temp[9];		//temp[8] is for the rp2040 temp
+unsigned char current[8];
+unsigned char temp[9];		//temp[8] is for the rp2040 temp
 char nextRead;		//first 4 bits indicate channel; highest 3 bits indicate ADC channel
 static uint8_t triacBase;		//the first DMX addr that is a triac
 static uint8_t triacVals[8];	//the actual values that the triacs are set to (more accurate than DMX_data)
@@ -67,12 +67,12 @@ void irq_MON_ADC(void){
 }
 
 void pre_lim_temp(int i){		//do I even need this?
-	if(i <= 8){
-		if(90 <= DMX_data.intens[triacBase+i] < 100)	//full conducion is better than partial conduction
-			DMX_data.intens[triacBase+i] = 100;
-		else if(0 < DMX_data.intens[triacBase+i] <= 50)	//otherwise lower-voltage switching is better
+	if(i <= 8){		//numbers are in 256ths
+		if(240 <= DMX_data.intens[triacBase+i])			//full conducion is better than partial conduction
+			DMX_data.intens[triacBase+i] = 255;
+		else if(0 < DMX_data.intens[triacBase+i] <= 128)	//otherwise lower-voltage switching is better
 			DMX_data.intens[triacBase+i] -= DMX_data.intens[triacBase+i] % 10;
-		else if(DMX_data.intens[triacBase+i] > 50)		//round to ten, do not turn off
+		else if(DMX_data.intens[triacBase+i] > 128)		//round to ten, do not turn off
 			DMX_data.intens[triacBase+i] += DMX_data.intens[triacBase+i] % 10;
 	}
 }
@@ -228,14 +228,14 @@ checkTempLim:
 		}
 
 finishReadLim:
-//		dbg_printf("current %i: %i\n", i, current[i]);
-//		dbg_printf("temp %i: %i\n", i, temp[i]);
+		dbg_printf("current %i: %i\n", i, current[i]);
+		dbg_printf("temp %i: %i\n", i, temp[i]);
 		current_sum += current[i];		//keep a running tally
 		triacVals[i] = DMX_data.intens[triacBase+i];		//update the real values; note that the get is after the limit calls
 	}
 
-//	dbg_printf("total current: %i\n", current_sum);
-//	dbg_printf("RP2040 temp: %i\n", temp[8]);
+	dbg_printf("total current: %i\n", current_sum);
+	dbg_printf("RP2040 temp: %i\n", temp[8]);
 
 	if(current_sum > I_LIM_TOTAL+5)
 		crit_lim_current(8);			//a little buffer of 5 amps above the max before we shut down compleately

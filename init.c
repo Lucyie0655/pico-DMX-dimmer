@@ -48,6 +48,7 @@ initializes the following (not in order):
 #include <outputs.h>
 #include <ssd1306.h>
 #include <busCtrl.h>
+#include <outputs.h>
 #ifdef DEBUG
 #include <math.h>				//used for converting string to number
 #endif
@@ -122,8 +123,11 @@ void entryCore1(void){
 #endif
 	while(1){		//mainloop
 		read_sensors();					//check ADC values XXX: EXIT POINT
+#if DEBUG != 3
+#ifndef NO_I2C
 		do_i2c_transmit();				//send any data we need on the I2C bus; XXX: BLOCKING
-
+#endif /*!def NO_I2C*/
+#endif /*DEBUG != 3*/
 
 #if !defined(DEBUG) || DEBUG != 3
 		//read all of the buttons NOTE: buttons are not debounced
@@ -140,7 +144,7 @@ void entryCore0(void){
 	dbg_printf("DMX interface setup!\n");
 
 	/*INIT: add output handlers for the DMX*/
-	DMX_registerOutputs(0, 8, 3, &setTriacs);				//XXX: if you would like to use the GPB change 8 to 16 and the 8 on the next line to 16 NOTE: base addr needs to be 0
+	DMX_registerOutputs(0, 8, TRIAC_UPDATE_TIME, &setTriacs);	//XXX: if you would like to use the GPB change 8 to 16 and the 8 on the next line to 16 NOTE: base addr needs to be 0
 	DMX_registerOutputs(8, 16, 5, &setPCA); 				//16 outputs, starting at address 8, updating (1/60s*5)=12Hz for the servos
 	dbg_printf("DMX outputs are primed!\n");
 
@@ -153,25 +157,7 @@ void entryCore0(void){
 	gpio_set_pulls(4, true, false);							//pull up resistors are not on the board
 	gpio_set_pulls(5, true, false);
 
-		/*I2C INIT: setup the PCA*/
-	//just pretend this is magic because I can't be bothered to comment it properly
-	//NOTE: we don't maintain the bus because I don't know how that effects register auto-incriment
-	char i2c_data_buf[2];									//we only use two bytes at a time
-	{
-		i2c_data_buf[0] = 0x00;
-		i2c_data_buf[1] = 0b00000100;
-	}
-	i2c_write_blocking(I2C_MAIN, 0x41, i2c_data_buf, 2, false);		//enable auto incriment
-	{
-		i2c_data_buf[0] = 0x01;
-		i2c_data_buf[1] = 0x0c;
-	}
-	i2c_write_blocking(I2C_MAIN, 0x41, i2c_data_buf, 2, false);		//change outputs on ack; and outputs open-drain
-	{
-		i2c_data_buf[0] = 0xFE;
-		i2c_data_buf[1] = 99;
-	}
-	i2c_write_blocking(I2C_MAIN, 0x41, i2c_data_buf, 2, false);		//set the prescaler to about 62.5 Hz (easiest prescaler for control)
+	initPCA();
 
 		/*I2C INIT: setup the display*/
 	ssd1306_init(&display, 128, 32, 0x3C, I2C_MAIN);				//init the display
@@ -184,53 +170,7 @@ void entryCore0(void){
 #endif	/*DEBUG != 3*/
 	dbg_printf("I2C ready!\n");
 
-	/*INIT: setup PIO_SHIFTS with our shift register driver*/
-	pio_claim_sm_mask(PIO_SHIFTS, 0xf);							//we use all of the state machines in this block
-	pio_set_sm_mask_enabled(PIO_SHIFTS, 0xF, false);			//disable all of the state machines
-
-	//start all of the PIO SMs on their origin
-	pio_add_program_at_offset(PIO_SHIFTS, &SftClkCtrl_program, 0);			//load the clock program
-	pio_sm_config pio_config = SftClkCtrl_program_get_default_config(0);
-	sm_config_set_out_pins(&pio_config, GPIO_SFT_RCK, 1);
-	sm_config_set_set_pins(&pio_config, GPIO_SFT_RCK, 1);
-	sm_config_set_sideset_pins(&pio_config, GPIO_SFT_CLK);
-	pio_sm_set_consecutive_pindirs(PIO_SHIFTS, 0, 0, 32, true);
-	sm_config_set_clkdiv(&pio_config, 107.08f);									//a divider of 135.63@125MHz = 921.62501KHz clock (output 0.003% fast)
-	pio_sm_init(PIO_SHIFTS, 0, 0, &pio_config);
-	
-	pio_add_program_at_offset(PIO_SHIFTS, &SftOutsCtrl_program, 12);			//load the output program block @ addr 4
-	pio_config = SftOutsCtrl_program_get_default_config(12);
-	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPA, 1);
-	sm_config_set_clkdiv(&pio_config, 5.0f);									//a divider of 5.0@125MHz = 25MHz clock
-	sm_config_set_fifo_join(&pio_config, PIO_FIFO_JOIN_TX);						//we don't read anything from here, so we can do this and write all of them at the same time
-	sm_config_set_out_shift(&pio_config, true, false, 8);						//configure autopull so that we always take exactly one char in
-	sm_config_set_out_special(&pio_config, true, false, 0);						//re-assert the out signal while holding for the clock
-	pio_sm_init(PIO_SHIFTS, 1, 12, &pio_config);
-
-	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPB, 1);
-	pio_sm_init(PIO_SHIFTS, 2, 12, &pio_config);
-	
-	pio_add_program_at_offset(PIO_SHIFTS, &SftInsCtrl_program, 16);			//load the input program block
-	pio_config = SftInsCtrl_program_get_default_config(16);
-	sm_config_set_in_pins(&pio_config, GPIO_DAT_BTN);
-	sm_config_set_in_shift(&pio_config, false, true, 8);
-	sm_config_set_clkdiv(&pio_config, 5.0f);
-	pio_sm_init(PIO_SHIFTS, 3, 16, &pio_config);
-
-	//init the GPIOs for the pio module
-	pio_gpio_init(PIO_SHIFTS, GPIO_SFT_CLK);
-	pio_gpio_init(PIO_SHIFTS, GPIO_SFT_RCK);
-	pio_gpio_init(PIO_SHIFTS, GPIO_DAT_BTN);
-	pio_gpio_init(PIO_SHIFTS, GPIO_DAT_GPA);
-	pio_gpio_init(PIO_SHIFTS, GPIO_DAT_GPB);
-
-	pio_sm_set_pindirs_with_mask(PIO_SHIFTS, 0, 0x1F, 0x1F);
-	pio_sm_set_pindirs_with_mask(PIO_SHIFTS, 1, 0x1F, 0x1F);
-	pio_sm_set_pindirs_with_mask(PIO_SHIFTS, 2, 0x1F, 0x1F);
-	pio_sm_set_pindirs_with_mask(PIO_SHIFTS, 3, 0, 0x1F);		//this one takes inputs instead of outputs
-
-	pio_set_irq0_source_enabled(PIO_SHIFTS, pis_interrupt0, true);
-	pio_enable_sm_mask_in_sync(PIO_SHIFTS, 0xf);				//start the state machine clocks
+	initTriacs();
 	dbg_printf("TRIAC output PIO ready!\n");
 
 
@@ -239,11 +179,13 @@ void entryCore0(void){
 	printf("Initiallizeation done! enabling inerrupts!\n");
 
 	/*INIT: interrupt time!*/
+	pio_set_irq0_source_enabled(PIO_SHIFTS, pis_sm1_tx_fifo_not_full, true);		//send more data to the pio block whenever it can take more
+	//keeping the buffer full like this allows us to disable/ignore interrupts for a little while if we need
+//	irq_set_exclusive_handler(PIO_SFT_IRQ, &triacInterrupt);//when PIO_SHIFTS raises irq0 (more data needed)
+//	irq_set_enabled(PIO_SFT_IRQ, true);
 	pio_sm_put(PIO_SHIFTS, 1, 0);							//send a pointless value at the last possible second
 	pio_sm_put(PIO_SHIFTS, 2, 0);							//just to get it all started
-	pio_set_irq0_source_enabled(PIO_SHIFTS, pis_interrupt0, true);		//route pio_shifts logical irq0 to arm interrupt PIO_SFT_IRQ
-	irq_set_exclusive_handler(PIO_SFT_IRQ, &triacInterrupt);//when PIO_SHIFTS raises irq0 (more data needed)
-	irq_set_enabled(PIO_SFT_IRQ, true);						//I've been debugging for 4 hours if this fixes it I am going to be angry
+
 
 	gpio_set_irq_enabled_with_callback(GPIO_ZC, GPIO_IRQ_EDGE_RISE, true, &irq_DMX_onZero);
 	irq_set_priority(IO_IRQ_BANK0, 0);						//the zero cross is the main timing method so it needs to take priority over everything
@@ -253,7 +195,7 @@ void entryCore0(void){
 	while(1){
 #ifndef NOCTRL
 		irq_set_enabled(UART0_IRQ, false);
-		uart_deinit(DMX_UART);								//if we have no control this can only get in our way
+		uart_deinit(DMX_UART);								//if we have no control we should disable the hardware DMX because it would be a headache if this wrote data
 
 		static char debugString[32];						//we need some way of debugging since I don't have my own DMX controller
 		char nextFeild;										//note that I left you no comments when writting this so just leave this alone; it works :)
