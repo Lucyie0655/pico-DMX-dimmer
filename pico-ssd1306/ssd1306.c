@@ -43,11 +43,11 @@ inline static void swap(uint32_t *a, uint32_t *b) {
 
 inline static void fancy_write(i2c_inst_t *i2c, uint8_t addr, const uint8_t *src, size_t len, char *name) {
 	//XXX: this is the only change I made other than seperateing the header from the project
-	if(i2c == i2c1)
+/*	if(i2c == i2c1)
 		add_i2c_transmit(addr, src, len);
 	else
-		printf("i2c0 is not currently supported for anything!\r\n");
-    /*
+		printf("i2c0 is not currently supported for anything!\r\n");*/
+    
 	switch(i2c_write_blocking(i2c, addr, src, len, false)) {
     case PICO_ERROR_GENERIC:
         printf("[%s] addr not acknowledged!\n", name);
@@ -58,7 +58,7 @@ inline static void fancy_write(i2c_inst_t *i2c, uint8_t addr, const uint8_t *src
     default:
         //printf("[%s] wrote successfully %lu bytes!\n", name, len);
         break;
-    }*/
+    }
 }
 
 inline static void ssd1306_write(ssd1306_t *p, uint8_t val) {

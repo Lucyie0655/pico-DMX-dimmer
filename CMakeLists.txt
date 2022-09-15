@@ -35,10 +35,12 @@ target_sources(${PROJECT_NAME} PRIVATE
 #TIMING_DEBUG 		- prints how far from ideal the pio is lagging
 #NOCTRL				- allows control over the USB debug interface NOTE: does not disable the actual DMX interface
 target_compile_definitions(${PROJECT_NAME} PUBLIC DEBUG=2)
-target_compile_definitions(${PROJECT_NAME} PUBLIC NO_I2C=1)
+#target_compile_definitions(${PROJECT_NAME} PUBLIC ENFORCE_TEMP_LIMITS)
+#target_compile_definitions(${PROJECT_NAME} PUBLIC LOG_ADC)
+#target_compile_definitions(${PROJECT_NAME} PUBLIC NO_I2C=1)
 #target_compile_definitions(${PROJECT_NAME} PUBLIC TIMING_DEBUG=1)
 #target_compile_definitions(${PROJECT_NAME} PUBLIC ISRDEBUG=1)
-#target_compile_definitions(${PROJECT_NAME} PUBLIC NOCTRL)
+target_compile_definitions(${PROJECT_NAME} PUBLIC NOCTRL)
 target_include_directories(${PROJECT_NAME} PRIVATE "./inc")
 
 pico_set_binary_type(${PROJECT_NAME} blocked_ram)

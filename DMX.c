@@ -62,7 +62,9 @@ void __irq irq_DMX_onZero(uint __unused gpio, uint32_t __unused event){
 
 #ifdef NO_TSK_SWITCH
 	for(int i=0; i<DMX_data.nextOut; i++){				//call all of the handlers to fire here
-		if(halfWave % DMX_data.updateTime[i] == 0){		//but only if they are ready to right now
+		//by doing halfWave+i will make this irq faster by
+		//staggering the half waves that handlers are called on
+		if((halfWave+i) % DMX_data.updateTime[i] == 0){		//but only if they are ready to right now
 			DMX_data.routines[i](
 							DMX_data.intens+dataOff,
 							DMX_data.noAddrs[i], 
@@ -81,7 +83,11 @@ void __irq irq_DMX_onTXCompleate(void){			//triggers on line break (DMX packet b
 	dbg_printf("D");
 #endif
 	dma_channel_abort(DMA_DMX_RX);				//kill the transfer if the controller did not send a full packet (this method blocks)
-	dma_channel_start(DMA_DMX_RX);				//restart this for the next transfer
+	while(uart_is_readable(DMX_UART))
+		uart_getc(DMX_UART);					//drain the uart FIFO (likely just one errored 0 for a break)
+
+	if(uart_getc(DMX_UART) == 0)				//FIXME: we need to check for a null start code before dispatching the DMA channel but if possible this should not block
+		dma_channel_start(DMA_DMX_RX);			//restart this for the next transfer
 }
 
 /*
@@ -95,7 +101,7 @@ void DMX_init(void){
 	}
 	uart_set_format(DMX_UART, 8, 2, UART_PARITY_NONE);		//DMX (RS-485) has 8 data, 2 stop bits and no parity
 	uart_get_hw(DMX_UART)->imsc = 0x100;		//only interrupt we need is the break error (/BE)
-	uart_get_hw(DMX_UART)->dmacr |= 0x01;		//allow for dma from the RX buffer, unless an error is received (break) FIXME: TODO: The documentation is unclear as to exactly what this does, if this doesn't work try a value of 0x05
+	uart_get_hw(DMX_UART)->dmacr |= 0x05;		//allow for dma from the RX buffer, unless an error is received (break)
 	gpio_set_function(0, GPIO_FUNC_UART);		//set pin 0 (physical pin no. 1) to be used by the uart
 	gpio_set_function(1, GPIO_FUNC_UART);		//set pin 1 (physical pin no. 2) to be used by the uart
 
@@ -124,8 +130,6 @@ void DMX_init(void){
 
 	//read the stored DMX address
 	read_from_flash(FLASH_DMX_ADDR, (uint8_t*)&DMX_data.baseAddr, sizeof(DMX_data.baseAddr));
-
-	irq_add_shared_handler(IRQ_DMX_RX, &irq_DMX_onTXCompleate, 0);		//this should be one of the most important handlers
 }
 
 /*
@@ -134,6 +138,7 @@ just a macro but we can't inline this or pre-process this becuse DMX_data is sta
 */
 void DMX_setBaseAddr(int addr){
 	DMX_data.baseAddr = addr;
+	triacSetBase(addr);
 /*TODO: write_to_flash is broken so someone needs to fix it*/
 //	write_to_flash(FLASH_DMX_ADDR, &DMX_data.baseAddr, sizeof(DMX_data.baseAddr));
 }
@@ -169,7 +174,7 @@ int DMX_registerOutputs(uint8_t base, uint8_t num, uint8_t updateTime, void (*se
 	}
 
 	//load into the struct; NOTE: the base doesn't actually do anything but a sanity check
-	DMX_data.updateTime[DMX_data.nextOut] = updateTime;		//in half waves
+	DMX_data.updateTime[DMX_data.nextOut] = updateTime;			//in half waves
 	DMX_data.routines[DMX_data.nextOut] = setRoutine;			//routine to set value
 	DMX_data.noAddrs[DMX_data.nextOut] = num;					//amount of addrs we have used
 	DMX_data.totalAddrs += num;
@@ -178,11 +183,14 @@ int DMX_registerOutputs(uint8_t base, uint8_t num, uint8_t updateTime, void (*se
 	return DMX_data.noAddrs[DMX_data.nextOut-1];
 }
 
-int DMX_lockoutChan(int i){
+void DMX_lockoutChan(int i){
 	DMX_data.lockedChan[i/64] |= 1 << (i%64);
 }
-int DMX_unlockChan(int i){
+void DMX_unlockChan(int i){
 	DMX_data.lockedChan[i/64] &=~ 1 << (i%64);
+}
+int DMX_isChanLocked(int i){
+	return !!(DMX_data.lockedChan[i/64] & (1 << i%64));
 }
 
 /*
@@ -246,7 +254,7 @@ int DMX_readButtons(){
 			if(buttonWasPressed & BUTTON_CONFIRM){
 				currentSetInfo.setMode = 0;
 				triacSetBase(DMX_data.baseAddr);
-				write_to_flash(0x100FFFF0, &(DMX_data.baseAddr), sizeof(DMX_data.baseAddr));
+//				write_to_flash(0x100FFFF0, &(DMX_data.baseAddr), sizeof(DMX_data.baseAddr));
 			}
 			break;
 		case 2:			//channel off

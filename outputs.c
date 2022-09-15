@@ -14,11 +14,6 @@
 uint8_t triacTiming[512];	//save every possible timing in order as a bitmap of what to turn on
 
 void setTriacs(char* restrict data, const size_t len, const uint64_t lockout){
-	if(len == 8)
-		memset(triacTiming, 0, 256);	//if we aren't using the GPB, we can save time by not clearing it
-	else
-		memset(triacTiming, 0, 512);	//clear out all of the old timing info
-
 	/*
 	I would like the easier processing of just a pulse trigger 
 	but the triacs have a latching current
@@ -33,41 +28,40 @@ void setTriacs(char* restrict data, const size_t len, const uint64_t lockout){
 	*/
 	for(int i=0; i<256; i++){
 		for(int j=0; j<len; j++){
-			data[j] >= 256-i ? triacTiming[i] |= (1 << j) : triacTiming[i];
+			if(!(lockout & j))
+				data[j] >= 256-i ? triacTiming[i] |= (1 << j) : (triacTiming[i] &= ~(1 << j));
 		}
-	}
-#if 0
-	for(int i=0; i<8; i++){		//order the stuff into our 256 different output timings
-//		if(!(lockout && 1 << i)){	//if we are not locked out
-			triacTiming[256-data[i]] |= (1 << i);		//earlier turn on means higher power, so we need to reverse-map this
-//		}
-		if(len == 16)
-			triacTiming[512-data[i+8]] |= (1 << i);		//just loop through once
-	}
-#endif
+	}/*
+	if(len > 8){
+		for(int i=0; i<256; i++){
+			for(int j=8; j<len; j++){
+				if(!(lockout & j))
+					data[j] >= 256-i ? triacTiming[i+256] |= (1 << j) : (triacTiming[i+256] &= ~(1 << j));
+			}
+		}
+	}*/
 }
 
-void __irq setPCA(char* data, size_t len, uint64_t lockout){	//XXX: if you ever need another PCA a lot of this function should be rewritten
-#if defined(DEBUG) && DEBUG == 2
+void __irq setPCA(char* data, size_t len, uint64_t __unused lockout){
+#if defined(DEBUG) && DEBUG == 3
 	//probably nothing here?
 #else	/*DEBUG == 2*/
-	uint16_t values[16] = {0};		//where we store the 16-bit mapped values, twice the number of servos we have, 16 bits for on time, 16 bits for off time
+	uint8_t x = 1;
 
-	for(int i=0; i<len; i++){		//copy to the bigger value, every other value needs to be 0
-		if(!(lockout && 1 << i))
-			values[i] = map(data[i], 0, 255, 512, 256);	//turn off time so reverse-map; 512 - 256 is between 1-2ms pulse length at 62.5Hz
-		else values[i] = 384;		//set to +/-0 degrees
-	}
+	if(sio_hw->fifo_st & SIO_FIFO_ST_RDY_BITS){
+		sio_hw->fifo_wr = 0x100 | (len & 0xFF);		//this will work well for if the total number of PCA outputs is < 256, which is currently the most we can control
+		for(int i=0; i<(len & 0xFF); i+=4){
 
-	//send the data
-	//fifo doesn't need the address we are writing to
-	for(int i=0; i<16; i+=2){
-		//USUALLY we dont block in a isr
-		//this is the exception because:
-		//a) we need to send all the data into a limited fifo
-		//b) the "periferal" is just as fast as the processor and takes interrupts
-		//[it doesn't really block unless something goes catastrophically wrong]
-		multicore_fifo_push_blocking((values[i+1] << 16) | values[i]);
+			while((!sio_hw->fifo_st & SIO_FIFO_ST_RDY_BITS) && x)	//wait for fifo space
+				x++;								//we use x as a timeout
+
+#ifdef DEBUG
+			if(!x)
+				dbg_printf("****ERROR: timeout on fifo push\n");
+#endif
+
+			sio_hw->fifo_wr = (uint32_t)data[i];	//send out all of the data 32-bits at a time
+		}
 	}
 #endif 	/*DEBUG == 2*/
 }
@@ -84,13 +78,13 @@ void initTriacs(){
 	sm_config_set_set_pins(&pio_config, GPIO_SFT_RCK, 1);
 	sm_config_set_sideset_pins(&pio_config, GPIO_SFT_CLK);
 	pio_sm_set_consecutive_pindirs(PIO_SHIFTS, 0, 0, 32, true);
-	sm_config_set_clkdiv(&pio_config, 68.96f);									//a divider of 135.63@125MHz = 921.62501KHz clock (output 0.003% fast)
+	sm_config_set_clkdiv(&pio_config, 65.56f);									//a divider of 68.96@125MHz = 1.813MHz clock (output 0.001% fast @ exactly 60Hz)
 	pio_sm_init(PIO_SHIFTS, 0, 0, &pio_config);
 	
 	pio_add_program_at_offset(PIO_SHIFTS, &SftOutsCtrl_program, 12);			//load the output program block @ addr 4
 	pio_config = SftOutsCtrl_program_get_default_config(12);
 	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPA, 1);
-	sm_config_set_clkdiv(&pio_config, 68.96f);									//a divider of 5.0@125MHz = 25MHz clock
+	sm_config_set_clkdiv(&pio_config, 65.96f);
 	sm_config_set_fifo_join(&pio_config, PIO_FIFO_JOIN_TX);						//we don't read anything from here, so we can do this and write all of them at the same time
 	sm_config_set_out_shift(&pio_config, true, true, 32);						//configure autopull so that we always take exactly one char in
 	sm_config_set_out_special(&pio_config, true, false, 0);						//re-assert the out signal while holding for the clock
@@ -99,11 +93,11 @@ void initTriacs(){
 	sm_config_set_out_pins(&pio_config, GPIO_DAT_GPB, 1);
 	pio_sm_init(PIO_SHIFTS, 2, 12, &pio_config);
 	
-	pio_add_program_at_offset(PIO_SHIFTS, &SftInsCtrl_program, 16);			//load the input program block
+	pio_add_program_at_offset(PIO_SHIFTS, &SftInsCtrl_program, 16);				//load the input program block
 	pio_config = SftInsCtrl_program_get_default_config(16);
 	sm_config_set_in_pins(&pio_config, GPIO_DAT_BTN);
 //	sm_config_set_in_shift(&pio_config, false, true, 8);
-	sm_config_set_clkdiv(&pio_config, 5.0f);
+	sm_config_set_clkdiv(&pio_config, 68.96f);
 	pio_sm_init(PIO_SHIFTS, 3, 16, &pio_config);
 
 	//init the GPIOs for the pio module
@@ -143,20 +137,33 @@ void initPCA(){
 	/*I2C INIT: setup the PCA*/
 	//read this document for the registers and what each bit means: https://cdn-shop.adafruit.com/datasheets/PCA9685.pdf
 	//NOTE: we don't maintain the bus because I don't know how that effects register auto-incriment
-	char i2c_data_buf[2];									//we only use two bytes at a time
+	char i2c_data_buf[6];									//we only use a few bytes at a time
 	{
 		i2c_data_buf[0] = 0x00;
-		i2c_data_buf[1] = 0b00000100;
+		i2c_data_buf[1] = 0b00110000;
 	}
-	i2c_write_blocking(I2C_MAIN, 0x41, i2c_data_buf, 2, false);		//enable auto increment
+	i2c_write_blocking(I2C_MAIN, PCA0_ADDR, i2c_data_buf, 2, false);		//enable auto increment and put to sleep mode
 	{
 		i2c_data_buf[0] = 0x01;
-		i2c_data_buf[1] = 0x0c;
+		i2c_data_buf[1] = 0x04;
 	}
-	i2c_write_blocking(I2C_MAIN, 0x41, i2c_data_buf, 2, false);		//change outputs on ack; and outputs open-drain
+	i2c_write_blocking(I2C_MAIN, PCA0_ADDR, i2c_data_buf, 2, false);		//change outputs on ack; and outputs totem pole output
 	{
 		i2c_data_buf[0] = 0xFE;
 		i2c_data_buf[1] = 99;
 	}
-	i2c_write_blocking(I2C_MAIN, 0x41, i2c_data_buf, 2, false);		//set the prescaler to about 62.5 Hz (easiest prescaler for control)
+	i2c_write_blocking(I2C_MAIN, PCA0_ADDR, i2c_data_buf, 2, false);		//set the prescaler to about 62.5 Hz (easiest prescaler for control)
+/*	{
+		i2c_data_buf[0] = 0xFA;
+		i2c_data_buf[1] = 0;
+		i2c_data_buf[2] = 0;
+		i2c_data_buf[3] = 128;
+		i2c_data_buf[4] = 1;
+	}
+	i2c_write_blocking(I2C_MAIN, PCA0_ADDR, i2c_data_buf, 5, false);*/
+	{
+		i2c_data_buf[0] = 0x00;
+		i2c_data_buf[1] = 0b00100000;
+	}
+	i2c_write_blocking(I2C_MAIN, PCA0_ADDR, i2c_data_buf, 2, false);
 }

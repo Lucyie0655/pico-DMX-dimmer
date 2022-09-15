@@ -5,7 +5,7 @@ I first assumed we would need a lot more processing we actually do
 
 to search for a specific initializeation step that you suspect is not working
 just Ctrl-F for "INIT:"
-both cores do some initializeation in paralell
+both cores do some initializeation in paralel
 
 (this is my checklist assume TODO: if not DONE)
 initializes the following (not in order):
@@ -73,20 +73,34 @@ void entryCore1(void){
 	dbg_printf("spi setup!\n");
 	/*INIT: TODO: this is where we should init the NRF and other SPI stuff*/
 
+
+	/*INIT: setup the MUX outputs for the ADC reads*/
+	gpio_init(GPIO_ADC_SEL_A);
+	gpio_init(GPIO_ADC_SEL_B);
+	gpio_init(GPIO_ADC_SEL_C);
+	gpio_set_dir(GPIO_ADC_SEL_A, true);
+	gpio_set_dir(GPIO_ADC_SEL_B, true);
+	gpio_set_dir(GPIO_ADC_SEL_C, true);
+	//turn off all the ADC MUX GPIOs
+	gpio_put_masked(GPIO_ADC_SEL_A | GPIO_ADC_SEL_B | GPIO_ADC_SEL_C, 0);
 	/*INIT: setup ADC*/
+	//slow the ADC down to increase intigration time, 100KHz input clock is a REALLY long intigration time for this ADC
+	clock_configure(clk_adc, 0, CLOCKS_CLK_ADC_CTRL_AUXSRC_VALUE_XOSC_CLKSRC, 12*1000*1000, 100*1000);
 	adc_init();
 	adc_set_temp_sensor_enabled(true);
-	adc_gpio_init(26);
-	adc_gpio_init(27);
-	adc_set_round_robin(0b11111);					//enable the core temp sensor, the TRIAC temp. sensor, and the bus current sensor
-	adc_fifo_setup(true, false, 1, false, false);	//irq when fifo reaches 1 entry, do not record errors; we use a fifo because an ADC conversion only takes 250 ARM cycles
+	adc_gpio_init(GPIO_ADC_ISENSE);
+	adc_gpio_init(GPIO_ADC_THERM);
+	adc_set_round_robin(0b10110);					//enable the core temp sensor, the TRIAC temp. sensor, and the bus current sensor
+	adc_fifo_setup(true, false, 1, false, false);	//don't use the FIFO
+	adc_irq_set_enabled(true);						//hey, this is a thing that has to be done :)
+	adc_run(true);
 	dbg_printf("ADC ready!\n");
 
 	/*INIT: we could claim a DMA channel here, but I think we have enough processing time to use IRQs*/
 
 	/*INIT: use the builtin LED as a status indicator, and pull up the zero crossing a bit better*/
 	gpio_init(GPIO_ZC);
-	gpio_set_pulls(GPIO_ZC, true, false);
+	gpio_set_pulls(GPIO_ZC, true, false);			//this is purely a hardware fault, the on-board pullup is not strong enough
 	gpio_init(GPIO_LED);
 	gpio_set_dir(GPIO_LED, 1);
 	gpio_put(GPIO_LED, true);			//turn this on for now, we can flash on errors maybe
@@ -100,41 +114,40 @@ void entryCore1(void){
 #endif
 	/*INIT: syncronize with core 0 so we know that intrs are valid*/
 	//I was previously using a blocking FIFO exchange instead of this but it seemed unreliable for some reason
-	__asm__ volatile ("sev; wfe");			//see RP2040 datasheet section 2.3.3 - both processors wake up at the same time +/- a few clocks
+	__asm__ volatile ("wfe");			//see RP2040 datasheet section 2.3.3 - both processors wake up at the same time +/- a few clocks
 	
 	/*INIT: interrupt time!*/
 	dbg_printf("setting core 1 IRQ handlers\n");
-//	sleep_ms(500);
-	//attach handlers XXX: something might be wrong with irq_set_exclusive_handler() it seems to hard-assert if you are setting a handler for the first time
-//	((uint32_t*)scb_hw->vtor)[16+ADC_IRQ_FIFO] = &irq_MON_ADC;
-//	((uint32_t*)scb_hw->vtor)[16+SIO_IRQ_PROC1] = &isr1_fifo;
 	irq_set_exclusive_handler(SIO_IRQ_PROC1, &isr1_fifo);
 	irq_set_exclusive_handler(ADC_IRQ_FIFO, &irq_MON_ADC);
 
 	//and enable them all
-//	irq_set_enabled(PWM_IRQ_WRAP, true);
 	irq_set_enabled(ADC_IRQ_FIFO, true);
-	irq_set_enabled(SIO_IRQ_PROC0, true);
+	irq_set_enabled(SIO_IRQ_PROC1, true);
 	sleep_ms(500);
-	while(1);
 
 #ifndef NO_TSK_SWITCH
 	//[add the handler here]
 #endif
+
 	while(1){		//mainloop
-		read_sensors();					//check ADC values XXX: EXIT POINT
+		//FIXME: the sensor values are unstable, unstable is bad, I don't want to fix it so no protection for you
+//		read_sensors();					//check ADC values XXX: EXIT POINT
+
 #if DEBUG != 3
 #ifndef NO_I2C
-		do_i2c_transmit();				//send any data we need on the I2C bus; XXX: BLOCKING
+		//FIXME: the i2c buffered functions don't seem to work
+		//it doesn't matter right now but someone needs to fix it before changing anything on the I2C bus
+//		do_i2c_transmit();				//send any data we need on the I2C bus; XXX: BLOCKING
 #endif /*!def NO_I2C*/
 #endif /*DEBUG != 3*/
 
 #if !defined(DEBUG) || DEBUG != 3
 		//read all of the buttons NOTE: buttons are not debounced
-		buttonInfo = DMX_readButtons();
-		if((time_us_32() / 1000) % 42 == 0){	//update the display every 42 ms (24 times/s)
-			updateDisplay(buttonInfo);
-		}
+	//	buttonInfo = DMX_readButtons();
+//		if((time_us_32() / 1000) % 100 == 0){	//update the display every 100 ms (10 times/s)
+//			updateDisplay(buttonInfo);
+//		}
 #endif
 	}
 }
@@ -145,25 +158,33 @@ void entryCore0(void){
 
 	/*INIT: add output handlers for the DMX*/
 	DMX_registerOutputs(0, 8, TRIAC_UPDATE_TIME, &setTriacs);	//XXX: if you would like to use the GPB change 8 to 16 and the 8 on the next line to 16 NOTE: base addr needs to be 0
-	DMX_registerOutputs(8, 16, 5, &setPCA); 				//16 outputs, starting at address 8, updating (1/60s*5)=12Hz for the servos
+	DMX_registerOutputs(8, 16, SERVO_UPDATE_TIME, &setPCA); 				//16 outputs, starting at address 8, updating (1/120s*10)=12Hz for the servos
 	dbg_printf("DMX outputs are primed!\n");
 
 	/*INIT: setup i2c*/
 #if (DEBUG != 3)
 #ifndef NO_I2C
 	i2c_init(I2C_MAIN, I2C_BAUD);							//XXX: fast mode plus may not be supported on other devices
-	gpio_set_function(4, GPIO_FUNC_I2C);					//if I were smart I would put the pindefs BEFORE we use the pins
-	gpio_set_function(5, GPIO_FUNC_I2C);
-	gpio_set_pulls(4, true, false);							//pull up resistors are not on the board
-	gpio_set_pulls(5, true, false);
+	gpio_set_function(2, GPIO_FUNC_I2C);
+	gpio_set_function(3, GPIO_FUNC_I2C);
+	gpio_set_pulls(2, true, false);							//pull up resistors are not on the board
+	gpio_set_pulls(3, true, false);
 
 	initPCA();
 
 		/*I2C INIT: setup the display*/
-	ssd1306_init(&display, 128, 32, 0x3C, I2C_MAIN);				//init the display
-	ssd1306_contrast(&display, 30);									//XXX: I don't know the units for the contrast value FIXME:
-	ssd1306_clear(&display);
+/*	display.external_vcc = false;
+	if(!ssd1306_init(&display, 128, 32, 0x3C, I2C_MAIN))
+		dbg_printf("failed to init display!\n");					//init the display
 	ssd1306_poweron(&display);										//display is now running
+	ssd1306_clear(&display);
+	ssd1306_contrast(&display, 0x80);
+	ssd1306_invert(&display, true);
+	ssd1306_draw_char(&display, 64, 16, 1, 'x');
+	ssd1306_show(&display);*/
+	sleep_ms(5);							//add a short delay because the I2C devices may take some time to init
+	char startingValues[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+//	setPCA(startingValues, sizeof(startingValues), 0);
 #else
 	dbg_printf("****WARNING: I2C disabled!\n");
 #endif  /*defined(NO_I2C)*/
@@ -179,22 +200,16 @@ void entryCore0(void){
 	printf("Initiallizeation done! enabling inerrupts!\n");
 
 	/*INIT: interrupt time!*/
-	pio_set_irq0_source_enabled(PIO_SHIFTS, pis_sm1_tx_fifo_not_full, true);		//send more data to the pio block whenever it can take more
-	//keeping the buffer full like this allows us to disable/ignore interrupts for a little while if we need
-//	irq_set_exclusive_handler(PIO_SFT_IRQ, &triacInterrupt);//when PIO_SHIFTS raises irq0 (more data needed)
-//	irq_set_enabled(PIO_SFT_IRQ, true);
-	pio_sm_put(PIO_SHIFTS, 1, 0);							//send a pointless value at the last possible second
-	pio_sm_put(PIO_SHIFTS, 2, 0);							//just to get it all started
-
-
 	gpio_set_irq_enabled_with_callback(GPIO_ZC, GPIO_IRQ_EDGE_RISE, true, &irq_DMX_onZero);
 	irq_set_priority(IO_IRQ_BANK0, 0);						//the zero cross is the main timing method so it needs to take priority over everything
 	irq_set_exclusive_handler(UART0_IRQ, &irq_DMX_onTXCompleate);
+#ifndef NOCTRL
 	irq_set_enabled(UART0_IRQ, true);
+#endif
 
 	while(1){
-#ifndef NOCTRL
-		irq_set_enabled(UART0_IRQ, false);
+#ifdef NOCTRL
+		irq_set_enabled(IRQ_DMX_RX, false);
 		uart_deinit(DMX_UART);								//if we have no control we should disable the hardware DMX because it would be a headache if this wrote data
 
 		static char debugString[32];						//we need some way of debugging since I don't have my own DMX controller
@@ -218,12 +233,12 @@ void entryCore0(void){
 				printf("\t[i]ntensity <addr> <percent>\n");
 				printf("\t[m]ax <addr>\n");
 				printf("\t[k]ill <addr>\n");
-				printf("\t[f]ault <0-current | 1-temp> <0-pre | 1-err | 2-crit> <channel (RELITIVE)>\n");
+				printf("\t[f]ault <[c]urrent | [t]emp> <[p]re | [e]rr | [c]rit> <channel (RELITIVE)>\n");
 				printf("\t[a]ddress <new device base addr>\n");
 				printf("\t[g]etBaseAddr\n");
 				printf("\ti[n]vertAllChannels\n");
-				printf("\t[s]endPioReinit\n");
-				printf("\t\tif the pico is not powered by mains this needs to be called after appyling power\n");
+				printf("\t[s]hutdown\n");
+				printf("\t\thalt both processors (useful if debug info is scrolling to fast to read)\n");
 				break;
 			case 'i':
 				nextFeild = 0;
@@ -264,36 +279,42 @@ void entryCore0(void){
 				nextFeild = 0;
 				for(int i=1; i<=strlen(debugString); i++){
 					if(debugString[i-1] == ' '){
-						if(nextFeild == 0){
-							debugAddr = strtol(debugString+i, NULL, 10);
-							nextFeild++;
-						}
-						else if(nextFeild == 1){
-							debugValue = strtol(debugString+i, NULL, 10);
-							nextFeild++;
-						}
-						else if(nextFeild == 2){
-							//big if-else mess
-							if(debugAddr == 0){
-								if(debugValue == 0)
-									pre_lim_current(strtol(debugString+i, NULL, 10));
-								if(debugValue == 1)
-									err_lim_current(strtol(debugString+i, NULL, 10));
-								if(debugValue == 2)
-									crit_lim_current(strtol(debugString+i, NULL, 10));
+						if(debugString[i] == 'c'){
+							if(debugString[i+2] == 'p'){
+								debugAddr = strtol(debugString+i+4, NULL, 10);
+								pre_lim_current(debugAddr);
+								printf("executed handler for pre_current on %i\n", debugAddr);
 							}
-							else if(debugValue == 1){
-								if(debugValue == 0)
-									pre_lim_temp(strtol(debugString+i, NULL, 10));
-								if(debugValue == 1)
-									err_lim_temp(strtol(debugString+i, NULL, 10));
-								if(debugValue == 2)
-									crit_lim_temp(strtol(debugString+i, NULL, 10));
+							if(debugString[i+2] == 'e'){
+								debugAddr = strtol(debugString+i+4, NULL, 10);
+								err_lim_current(debugAddr);
+								printf("executed handler for err_current on %i\n", debugAddr);
+							}
+							if(debugString[i+2] == 'c'){
+								debugAddr = strtol(debugString+i+4, NULL, 10);
+								crit_lim_current(debugAddr);
+								printf("executed handler for crit_current on %i\n", debugAddr);
+							}
+						}
+						else if(debugString[i] == 't'){
+							if(debugString[i+2] == 'p'){
+								debugAddr = strtol(debugString+i+4, NULL, 10);
+								pre_lim_temp(debugAddr);
+								printf("executed handler for pre_temp on %i\n", debugAddr);
+							}
+							if(debugString[i+2] == 'e'){
+								debugAddr = strtol(debugString+i+4, NULL, 10);
+								err_lim_temp(debugAddr);
+								printf("executed handler for err_temp on %i\n", debugAddr);
+							}
+							if(debugString[i+2] == 'c'){
+								debugAddr = strtol(debugString+i+4, NULL, 10);
+								crit_lim_temp(debugAddr);
+								printf("executed handler for crit_temp on %i\n", debugAddr);
 							}
 						}
 					}
 				}
-				printf("executed handler\n");
 				break;
 			case 'a':
 				for(int i=1; i<=strlen(debugString); i++){
@@ -315,9 +336,9 @@ void entryCore0(void){
 				printf("all outputs at opposite extreme\n");
 				break;
 			case 's':
-				pio_sm_put(PIO_SHIFTS, 1, 255);
-				pio_sm_put(PIO_SHIFTS, 2, 255);
-				printf("reinitialized PIO blocks\n");
+				__asm__ volatile ("cpsid if");
+				multicore_reset_core1();
+				__asm__ volatile ("wfi");
 				break;
 			default:
 				printf("invalid command!\n");

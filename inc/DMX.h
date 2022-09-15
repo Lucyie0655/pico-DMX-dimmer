@@ -51,8 +51,9 @@ void DMX_receive(void);
 
 int DMX_registerOutputs(uint8_t base, uint8_t num, uint8_t updateTime, void (*setRoutine)(char*, size_t, uint64_t));
 
-int DMX_lockoutChan(int i);
-int DMX_unlockChan(int i);
+void DMX_lockoutChan(int i);
+void DMX_unlockChan(int i);
+int DMX_isChanLocked(int i);
 
 #define BUTTON_PLUS1	1
 #define BUTTON_PLUS10	2

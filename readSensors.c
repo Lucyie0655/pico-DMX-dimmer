@@ -14,54 +14,72 @@
 #include <outputs.h>
 
 unsigned char current[8];
-unsigned char temp[9];		//temp[8] is for the rp2040 temp
-char nextRead;		//first 4 bits indicate channel; highest 3 bits indicate ADC channel
+unsigned char temp[9];			//temp[8] is for the rp2040 temp
+char nextRead;					//LSB 4 bits indicate channel
+
+
 static uint8_t triacBase;		//the first DMX addr that is a triac
 static uint8_t triacVals[8];	//the actual values that the triacs are set to (more accurate than DMX_data)
 static uint8_t isLockedOut;		//keep our own record of what is locked out
 
 extern DMX_info DMX_data;		//from DMX.c
-extern uint8_t systemError;				//from ctrl/display.c
+extern uint8_t systemError;		//from ctrl/display.c
 
 void irq_MON_ADC(void){
 #ifdef ISRDEBUG
 	dbg_printf("A");
 #endif
-	//TODO: current should be RMS over about 10 seconds and temperature should be mean averaged over about a second
+	//TODO: current should be RMS over about 1 second and temperature should be mean averaged over about a second
 	//to prevent the error mentioned on page 589 of the RP2040 datasheet
 	//(error peaks every 2^9 samples)
-	uint16_t adc_data;
-	for(int i=0; adc_fifo_get_level() != 0; i++){		//if we have more than one thing, do all of them
-		adc_data = adc_fifo_get();		//get all of the data into memory
+	int16_t adc_data;
+	int8_t nextADCInput;
+
+	while(adc_fifo_get_level() != 0){		//if we have more than one thing, do all of them
+		adc_data = adc_fifo_get();			//get all of the data into memory
+		if(adc_data & 0x8000)				//indicates error
+			continue;						//we don't really care if we miss only one sample
+
+		nextADCInput = (adc_hw->cs & ADC_CS_AINSEL_BITS) >> ADC_CS_AINSEL_LSB;
+		if(nextADCInput == 4)					//if the ADC is taking input from the 4th MUX in
+			nextADCInput = 3;					//that is the third type of input for us
+		nextADCInput -= adc_fifo_get_level();
+		while(nextADCInput <= 0)
+			nextADCInput += 3;
 		
 		//convert data into actual measures (amps and degrees C) (0.8mV/step)
-		switch(nextRead >> 5){
-			case 0:				//FIXME: what channel is this on?
+		//who knows what these case constants mean, I figured them out through trial and error
+		switch(nextADCInput){
+			case 3:		//this is current
 				//convert the current values (40mV/A == 50steps/A)
-				current[nextRead & 0xf] = (adc_data - 2048)/50;		//current *should* now have a value from -50 to +50
+				if(adc_data > 2048)
+					current[nextRead & 0xf] = (adc_data-2048)/50;		//current *should* now have a value from -50 to +50
+				else
+					current[nextRead & 0xf] = (2048-adc_data)/50;		//for an absolute current rating
 				break;
 
-			case 1:				//FIXME: what channel is this on
-				//convert the temp sensors (1.3mV/A? == 1.6steps/A?)
-				temp[nextRead & 0xf] = 0;							//FIXME: we need numbers
+			case 2:		//TRIAC temperature
+				//convert the temp sensors (1.3mV/C? == 1.6steps/C?)
+				temp[nextRead & 0xf] = (adc_data - 882)/2+27;			//FIXME: we need numbers for the actual diode we used
 				break;
 
-			case 5:
+			case 1:		//chip temperature
 				//convert the internal temp value (-1.72mV/°C == 2.15steps/°C) (27°C @ 882 read)
 				temp[8] = ((adc_data - 882)/2)+27;					//temp[8] should stay below 85°C; other temps should be good to 105
 				break;
 
 			default:		//something must have gone wrong in memory to be here
-#if defined(DEBUG) && (DEBUG == 2)			//we really shouldn't be spamming the console even in a debug build
-				dbg_printf("unused ADC read\n");
+#if defined(DEBUG)
+				dbg_printf("unused ADC read: %i\n", nextRead >> 5);
 #endif
 				;			//null statement so it compiles non-debug
 		}
-		nextRead += 0x20;				//add one to the channel bit field
 		//the actual build will have optimizeations so this is just as good, if not better than a bit field
-		if(!((nextRead ^ 0xE0) >> 5)){	//when we are reading from the internal temperature sensor
+		if(nextADCInput == 4){
 			nextRead++;
-			nextRead &= ~0x10;			//if our bit field overflows we have a buffer bit we can clear
+			nextRead &= ~0xF0;			//if our bit field overflows we have a buffer bit we can clear
+			gpio_put_masked(1 << GPIO_ADC_SEL_A | 1 << GPIO_ADC_SEL_B | 1 << GPIO_ADC_SEL_C, 
+							(nextRead+2 & 0x7) << GPIO_ADC_SEL_C);		//set the MUX GPIOs to whatever the var says they should be
 		}
 	}
 }
@@ -79,18 +97,16 @@ void pre_lim_temp(int i){		//do I even need this?
 void pre_lim_current(int i){}
 void err_lim_temp(int i){
 	if(i < 8){
-		if(DMX_data.intens[triacBase+i] >= triacVals[i]){
-			if(!(isLockedOut && 1 << i)){
+		if(DMX_data.intens[triacBase+i] > triacVals[i]){
+			if(!DMX_isChanLocked(triacBase+i)){
 				printf("****WARNING: tried to increase channel while at temp limit\n");
 				setTriacs(triacVals, 8, 0);
-				DMX_lockoutChan(i);			//don't let the DMX increase the output while at our limit
-				isLockedOut |= (1 << i);
+				DMX_lockoutChan(triacBase+i);		//don't let the DMX increase the output while at our limit
 				systemError = 0xE8;			//I'm making these up as I go, so they are going to seem pretty random
 			}
 		}
 		else{
-			DMX_unlockChan(i);				//if we try to go down it is all good again
-			isLockedOut &= ~(1 << i);
+			DMX_unlockChan(triacBase+i);	//if we try to go down it is all good again
 			systemError = 0;			//clear error
 		}
 	}
@@ -104,49 +120,47 @@ void err_lim_temp(int i){
 void err_lim_current(int i){
 	if(i < 8){				//actual channel
 		if(DMX_data.intens[triacBase+i] > triacVals[i]){		//if we try to go up
-			if(!(isLockedOut && 1 << i)){
+			if(!DMX_isChanLocked(triacBase+i)){
 				printf("****WARNING: tried to increase channel while at channel current limit\n");
 				setTriacs(triacVals, 8, 0);					//this call makes it practically impossible to false bump this
 				//and impossible if you concider the USB poll of the desk keyboard
-				DMX_lockoutChan(1 << i);						//and take control of this
-				isLockedOut |= (1 << i);
+				DMX_lockoutChan(triacBase+i);				//and take control of this
 				systemError = 0xEA;				//every error will be even
 			}
 		}
 		else if(DMX_data.intens[triacBase+i] < triacVals[i]){
-			DMX_unlockChan(1 << i);						//we want to turn down the current, that's fine
-			isLockedOut &= ~(1 << i);
+			DMX_unlockChan(triacBase+i);					//we want to turn down the current, that's fine
 			systemError = 0;
 		}
 	}
 	else{					//lock all of them
 		for(int j=0; j<8; j++){
 			if(DMX_data.intens[triacBase+j] > triacVals[j]){
-				if(!(isLockedOut && 1 << i)){
+				if(!DMX_isChanLocked(triacBase+j)){
 					printf("****WARNING: tried to increase channel while at device current limit\n");
 					setTriacs(triacVals, 8, 0);
-					DMX_lockoutChan(0xFF);						//mask all of them locked
-					isLockedOut |= (1 << i);
+					for(int i=0; i<8; i++)
+						DMX_lockoutChan(triacBase+i);			//mask all of them locked
 					systemError = 0xEC;			//I am going to put a comment on every one of these
 				}
 			}
+			//this lets us choose a lower current without having to turn everything off
 			else if(DMX_data.intens[triacBase+j] < triacVals[j]){
 				//non-critical function just let us change all of them again
-				DMX_unlockChan(0xFF);
-				isLockedOut &= ~(1 << i);
+				for(int i=0; i<8; i++)
+					DMX_unlockChan(triacBase+i);
 				systemError = 0;
 			}
 		}
 	}
 }
 void crit_lim_temp(int i){
-	printf("****ERROR: reached temperature limit!\n");
 	if(i < 8){
-		if(!(isLockedOut && 1 << i)){
+		if(!DMX_isChanLocked(triacBase+i)){
+			printf("****ERROR: reached temperature limit!\n");
 			triacVals[i] = 0;			//shut down the channel completely
 			setTriacs(triacVals, 8, 0);
-			DMX_lockoutChan(1 << i);
-			isLockedOut |= (1 << i);
+			DMX_lockoutChan(triacBase+i);
 			systemError = 0xFA;					//0xFx errors are now critical
 		}
 	}
@@ -165,26 +179,24 @@ void crit_lim_temp(int i){
 
 		//here we only have one processor sleeping whith irq's off so we need to reset
 		//but it will definetly be able to cool down doing this
+		//we are also in a dorment state which I think will use even less power
 	}
 }
 void crit_lim_current(int i){
-	printf("****ERROR: reached current limit on channel!\n");
 	if(i < 8){
-		if(!(isLockedOut && 1 << i)){
+		if(!DMX_isChanLocked(triacBase+i)){
+			printf("****ERROR: reached current limit on channel!\n");
 			triacVals[i] = 0;			//turn off the overloaded channel
 			setTriacs(triacVals, 8, 0);
-			DMX_lockoutChan(1 << i);
-			isLockedOut |= (1 << i);
+			DMX_lockoutChan(triacBase+i);
 			systemError = 0xFC;					//last one
 		}
 	}
 	else{
-		if(!(isLockedOut && 1 << i)){
 			*(uint64_t*)triacVals = 0;		//turn off all of the triacs in one line (8 chars)
 			setTriacs(triacVals, 8, 0);
-			DMX_lockoutChan(0xFF);				//shut it all down
-			isLockedOut = 0xFF;
-		}
+			for(int i=0; i<8; i++)
+				DMX_lockoutChan(triacBase+i);				//shut it all down
 	}
 }
 
@@ -195,6 +207,7 @@ void triacSetBase(uint16_t baseAddr){
 void read_sensors(void){
 	int current_sum;
 	current_sum = 0;			//reset it every time for now
+
 
 	for(int i=0; i<8; i++){
 		//check the current from highest to lowest
@@ -213,6 +226,7 @@ void read_sensors(void){
 		}
 
 checkTempLim:
+#ifdef ENFORCE_TEMP_LIMITS
 		//check the temprature and only call the highest handler
 		if(temp[i] > T_CHAN_CRIT){
 			crit_lim_temp(i);
@@ -226,49 +240,69 @@ checkTempLim:
 			pre_lim_temp(i);
 			goto finishReadLim;
 		}
+#endif
 
 finishReadLim:
-		dbg_printf("current %i: %i\n", i, current[i]);
-		dbg_printf("temp %i: %i\n", i, temp[i]);
 		current_sum += current[i];		//keep a running tally
 		triacVals[i] = DMX_data.intens[triacBase+i];		//update the real values; note that the get is after the limit calls
 	}
 
-	dbg_printf("total current: %i\n", current_sum);
-	dbg_printf("RP2040 temp: %i\n", temp[8]);
+#ifdef LOG_ADC
+	if((time_us_32() / 1000) % 500 == 0){ 	//print telemetry to serial every 500ms
+		for(int i=0; i<8; i++){
+			dbg_printf("current %i: %i\n", i, (int)current[i]);
+			dbg_printf("temp %i: %i\n", i, (int)temp[i]);
+		}
+		dbg_printf("total current: %i\n", current_sum);
+		dbg_printf("RP2040 temp: %i\n", temp[8]);
+	}
+#endif
 
 	if(current_sum > I_LIM_TOTAL+5)
 		crit_lim_current(8);			//a little buffer of 5 amps above the max before we shut down compleately
 	if(current_sum > I_LIM_TOTAL)
 		err_lim_current(8);
 
-	if(temp[8] > 85)
-		err_lim_temp(8);
-	if(temp[8] > 75)					//the RP2040 is not able to handle as high a temp as everything else
-		err_lim_temp(8);
-
+//	if(temp[8] > 85)
+//		crit_lim_temp(8);
+//	if(temp[8] > 75)					//the RP2040 is not able to handle as high a temp as everything else
+//		err_lim_temp(8);
 
 
 	//if we reach a critical point we need to reset manually by turning it off and turning it on again
-	if((isLockedOut != 0) && (isLockedOut != 0xFF)){		//if the device is not locked out
+	bool isILim = true;
+	for(int i=0; i<8; i++){				//check if the whole device is locked out
+		if(!DMX_isChanLocked(triacBase+i)){
+			isILim = false;
+			break;
+		}
+	}
+
+	if(isILim){							//if the entire device is locked out, we can assume it a current issue
 		for(int i=0; i<8; i++){
+			if(DMX_data.intens[triacBase+i] != 0){
+				return;
+			}
+		}
+		for(int i=0; i<8; i++)
+			DMX_unlockChan(triacBase+i);
+		systemError = 0;
+	}
+	else{
+		for(int i=0; i<8; i++){
+
 			//if the channel is locked out AND the channel is set to 0 AND the channel is not overheating (err level)
-			if((isLockedOut && (1 << i)) && 
-						(DMX_data.intens[triacBase+i] == 0) &&
-						(temp[i] <= 85)){
-				isLockedOut &= ~(1 << i);
-				DMX_unlockChan(1 << i);
+			if(!DMX_isChanLocked(triacBase+i) 
+					&& DMX_data.intens[triacBase+i]
+#ifdef ENFORCE_TEMP_LIMITS
+					&& temp[i] <= 85
+#endif
+					)
+			{
+
+				DMX_unlockChan(triacBase+i);
 				systemError = 0;
 			}
 		}
 	}
-	else if(isLockedOut){		//if the entire device is locked out, we can assume it a current issue
-		for(int i=0; i<8; i++){
-			if(DMX_data.intens[triacBase+i] != 0)
-				return;			//this is the last part of the function, so just return early
-		}
-		DMX_unlockChan(0xFF);
-		systemError = 0;
-	}
-
 }

@@ -12,7 +12,7 @@
 
 /*DMA mappings*/
 #define DMA_DMX_RX 0				//keep these in sync
-#define IRQ_DMX_RX DMA_IRQ_0		//otherwise you will break it terribly
+#define IRQ_DMX_RX UART0_IRQ		//otherwise you will break it terribly
 
 #define DMA_TRIAC_1 1				//triacs need 2 DMA channels
 #define DMA_TRIAC_2 2
@@ -22,7 +22,7 @@
 
 /*I2C mappings*/
 #define I2C_MAIN i2c1
-#define PCA0_ADDR 0x60
+#define PCA0_ADDR 0x40
 
 /*SPI mappings*/
 #define SPI_MAIN spi0
