@@ -14,7 +14,6 @@ since the file name is confusing I thought I would leave a discription
 #include <hardware/i2c.h>
 #include <hardware/spi.h>
 
-void isr1_fifo(void);
 
 void add_i2c_transmit(uint8_t, const uint8_t*, size_t);		//allows us to add anything to the static arbitration variables
 void do_i2c_transmit(void);		//this is the only one that we use right now
@@ -22,6 +21,7 @@ void do_i2c_transmit(void);		//this is the only one that we use right now
 //void do_spi_transmit(void);		//we could use this for wireless DMX? TODO:?
 
 #define FLASH_DMX_ADDR (1024*1024)
+void isr1_flash_prison(void);		//somewhere for core 1 to wait while we program flash 
 void write_to_flash(uint32_t, const void*, size_t);				//I don't know where we should put these functions
 void read_from_flash(uint32_t, void*, size_t);
 

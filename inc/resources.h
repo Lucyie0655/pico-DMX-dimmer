@@ -39,7 +39,7 @@
 #define GPIO_LED 25
 #define GPIO_SFT_CLK 16
 #define GPIO_SFT_RCK 17
-#define GPIO_DAT_GPA 18			//TODO: figure out what pin this actually is
+#define GPIO_DAT_GPA 18
 #define GPIO_DAT_GPB 19
 #define GPIO_DAT_BTN 20
 #define GPIO_ZC 15

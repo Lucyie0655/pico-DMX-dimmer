@@ -6,10 +6,12 @@
 
 #define SERVO_UPDATE_TIME 	10		//unit 1/120th of a second (83ms)
 #define TRIAC_UPDATE_TIME 	4		//we don't want the update times to sync up so that we can process stuff faster (175ms)
-//the triac update could technically be absurdly long because of the filiment hysteresis (https://en.wikipedia.org/wiki/Hysteresis)
+//the triac update could technically be absurdly long because of the filiments thermal hysteresis
 
 void initTriacs();
 void initPCA();
+
+void isr1_fifo(void);
 
 void setTriacs(char*, size_t, uint64_t);
 void setPCA(char*, size_t, uint64_t);

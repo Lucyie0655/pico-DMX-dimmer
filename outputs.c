@@ -8,6 +8,7 @@
 #include <outputs.h>
 #include <resources.h>
 #include <DMX.h>
+#include <busCtrl.h>
 #include <string.h>
 #include "shiftOuts.pio.h"
 
@@ -28,7 +29,7 @@ void setTriacs(char* restrict data, const size_t len, const uint64_t lockout){
 	*/
 	for(int i=0; i<256; i++){
 		for(int j=0; j<len; j++){
-			if(!(lockout & j))
+			if(!(lockout & (1 << j)))
 				data[j] >= 256-i ? triacTiming[i] |= (1 << j) : (triacTiming[i] &= ~(1 << j));
 		}
 	}/*
@@ -42,28 +43,62 @@ void setTriacs(char* restrict data, const size_t len, const uint64_t lockout){
 	}*/
 }
 
+struct {
+	uint8_t command;
+	uint32_t intensity[16];
+} __attribute__((packed)) servoData;
+
 void __irq setPCA(char* data, size_t len, uint64_t __unused lockout){
 #if defined(DEBUG) && DEBUG == 3
 	//probably nothing here?
 #else	/*DEBUG == 2*/
 	uint8_t x = 1;
+	servoData.command = 0x06;
 
 	if(sio_hw->fifo_st & SIO_FIFO_ST_RDY_BITS){
-		sio_hw->fifo_wr = 0x100 | (len & 0xFF);		//this will work well for if the total number of PCA outputs is < 256, which is currently the most we can control
-		for(int i=0; i<(len & 0xFF); i+=4){
-
-			while((!sio_hw->fifo_st & SIO_FIFO_ST_RDY_BITS) && x)	//wait for fifo space
-				x++;								//we use x as a timeout
-
-#ifdef DEBUG
-			if(!x)
-				dbg_printf("****ERROR: timeout on fifo push\n");
-#endif
-
-			sio_hw->fifo_wr = (uint32_t)data[i];	//send out all of the data 32-bits at a time
+		for(int i=0; i<(len & 0xFF); i++){
+			servoData.intensity[i] = ((uint32_t)data[i] << 16) + 0x1000000;
 		}
+
+		sio_hw->fifo_wr = 0x100 | (len & 0xFF);		//this will work well for if the total number of PCA outputs is < 256, which is currently the most we can control
 	}
 #endif 	/*DEBUG == 2*/
+}
+
+void isr1_fifo(void){
+#ifdef ISRDEBUG
+	dbg_printf("F");
+#endif
+	uint32_t sio_command;
+	uint32_t nextValue;
+	uint8_t x = 1;
+
+	__asm__ volatile ("cpsid if");			//clear interrupts because this irq will interrupt itself
+
+	if(!sio_hw->fifo_st & SIO_FIFO_ST_VLD_BITS)
+		goto irq_exit;
+	
+	sio_command = sio_hw->fifo_rd;
+	switch(sio_command & 0xFF00){
+		case 0x100:
+			goto read_servos;
+		case 0x200:
+			isr1_flash_prison();
+			goto irq_exit;
+		default:
+			printf("ERROR: unsupported fifo command: 0x%02X\n", sio_command);
+			goto irq_exit;
+	}
+
+read_servos:
+//	add_i2c_transmit(PCA0_ADDR, (uint8_t*)servoData+3, sizeof(servoData)-3);
+	i2c_write_blocking(I2C_MAIN, PCA0_ADDR, (uint8_t*)&(servoData.command), sizeof(servoData), false);
+
+irq_exit:
+	__asm__ volatile ("cpsie if");
+	while(sio_hw->fifo_st & SIO_FIFO_ST_VLD_BITS)		//clear the FIFO
+		sio_hw->fifo_rd;
+	multicore_fifo_clear_irq();							//clear the IRQ
 }
 
 void initTriacs(){
@@ -166,4 +201,6 @@ void initPCA(){
 		i2c_data_buf[1] = 0b00100000;
 	}
 	i2c_write_blocking(I2C_MAIN, PCA0_ADDR, i2c_data_buf, 2, false);
+
+	servoData.command = 0x06;
 }

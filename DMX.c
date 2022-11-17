@@ -126,10 +126,11 @@ void DMX_init(void){
 						);		//set channel 0 to constantly read from uart0 into DMX_values
 	
 	memset(&DMX_data, 0, sizeof(DMX_data));			//clear out dmx DMX_data first
-	assert(DMX_data[0] == DMX_data.intens[0]);
+	assert(DMX_data == DMX_data.intens);
 
 	//read the stored DMX address
-	read_from_flash(FLASH_DMX_ADDR, (uint8_t*)&DMX_data.baseAddr, sizeof(DMX_data.baseAddr));
+	DMX_data.baseAddr = *(uint16_t*)(XIP_BASE+FLASH_DMX_ADDR);		//read_from_flash() seems upset for some reason, but this works just fine
+	triacSetBase(DMX_data.baseAddr);
 }
 
 /*
@@ -139,8 +140,8 @@ just a macro but we can't inline this or pre-process this becuse DMX_data is sta
 void DMX_setBaseAddr(int addr){
 	DMX_data.baseAddr = addr;
 	triacSetBase(addr);
-/*TODO: write_to_flash is broken so someone needs to fix it*/
-//	write_to_flash(FLASH_DMX_ADDR, &DMX_data.baseAddr, sizeof(DMX_data.baseAddr));
+
+	write_to_flash(FLASH_DMX_ADDR, &(DMX_data.baseAddr), sizeof(DMX_data.baseAddr));
 }
 int DMX_getBaseAddr(void){
 	return DMX_data.baseAddr;

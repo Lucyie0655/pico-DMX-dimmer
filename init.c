@@ -38,6 +38,7 @@ initializes the following (not in order):
 #include <hardware/adc.h>
 #include <hardware/dma.h>
 #include <hardware/clocks.h>
+#include <hardware/structs/psm.h>
 #include "shiftOuts.pio.h"
 
 #include <init.h>
@@ -63,7 +64,7 @@ void entryCore1(void){
 	uint16_t buttonInfo;
 
 	/*INIT: setup SPI*/
-	spi_init(spi0, SPI_BAUD);		//TODO: check again if this is spi0 or spi1;; overclock spi to 14MHz
+	spi_init(spi0, SPI_BAUD);		//TODO: check again if this is spi0 or spi1
 	spi_set_slave(spi0, false); 	//this makes me think we could do some cool stuff with spi1 as slave?
 	spi_set_format(spi0, 8, 0, 0, SPI_MSB_FIRST);		//check some of this stuff [data bits, CPOL, CPHA]
 	gpio_set_function(9, GPIO_FUNC_SPI);		//set the output pins
@@ -85,15 +86,16 @@ void entryCore1(void){
 	gpio_put_masked(GPIO_ADC_SEL_A | GPIO_ADC_SEL_B | GPIO_ADC_SEL_C, 0);
 	/*INIT: setup ADC*/
 	//slow the ADC down to increase intigration time, 100KHz input clock is a REALLY long intigration time for this ADC
-	clock_configure(clk_adc, 0, CLOCKS_CLK_ADC_CTRL_AUXSRC_VALUE_XOSC_CLKSRC, 12*1000*1000, 100*1000);
+//	clock_configure(clk_adc, 0, CLOCKS_CLK_ADC_CTRL_AUXSRC_VALUE_XOSC_CLKSRC, 12*1000*1000, 10*1000);
 	adc_init();
 	adc_set_temp_sensor_enabled(true);
 	adc_gpio_init(GPIO_ADC_ISENSE);
 	adc_gpio_init(GPIO_ADC_THERM);
-	adc_set_round_robin(0b10110);					//enable the core temp sensor, the TRIAC temp. sensor, and the bus current sensor
-	adc_fifo_setup(true, false, 1, false, false);	//don't use the FIFO
+//	adc_set_round_robin(0b10110);					//enable the core temp sensor, the TRIAC temp. sensor, and the bus current sensor
+	adc_set_round_robin(4);
+	adc_fifo_setup(true, false, 1, true, false);	//don't use the FIFO
 	adc_irq_set_enabled(true);						//hey, this is a thing that has to be done :)
-	adc_run(true);
+	adc_run(false);									//we want single shot mode
 	dbg_printf("ADC ready!\n");
 
 	/*INIT: we could claim a DMA channel here, but I think we have enough processing time to use IRQs*/
@@ -103,7 +105,7 @@ void entryCore1(void){
 	gpio_set_pulls(GPIO_ZC, true, false);			//this is purely a hardware fault, the on-board pullup is not strong enough
 	gpio_init(GPIO_LED);
 	gpio_set_dir(GPIO_LED, 1);
-	gpio_put(GPIO_LED, true);			//turn this on for now, we can flash on errors maybe
+	gpio_put(GPIO_LED, true);						//turn this on for now, we can flash on errors maybe
 
 
 #ifndef NO_TSK_SWITCH
@@ -122,9 +124,10 @@ void entryCore1(void){
 	irq_set_exclusive_handler(ADC_IRQ_FIFO, &irq_MON_ADC);
 
 	//and enable them all
-	irq_set_enabled(ADC_IRQ_FIFO, true);
+	irq_set_enabled(ADC_IRQ_FIFO, false);			//TODO: I'm just ignoring the measurements, they mostly work just change the enable here
 	irq_set_enabled(SIO_IRQ_PROC1, true);
-	sleep_ms(500);
+	sleep_ms(100);									//TBH I don't remember why we wait here but it shouldn't matter to anything
+	adc_hw->cs |= ADC_CS_START_ONCE_BITS;
 
 #ifndef NO_TSK_SWITCH
 	//[add the handler here]
@@ -132,7 +135,7 @@ void entryCore1(void){
 
 	while(1){		//mainloop
 		//FIXME: the sensor values are unstable, unstable is bad, I don't want to fix it so no protection for you
-//		read_sensors();					//check ADC values XXX: EXIT POINT
+		read_sensors();					//check ADC values XXX: EXIT POINT
 
 #if DEBUG != 3
 #ifndef NO_I2C
@@ -182,9 +185,8 @@ void entryCore0(void){
 	ssd1306_invert(&display, true);
 	ssd1306_draw_char(&display, 64, 16, 1, 'x');
 	ssd1306_show(&display);*/
+	watchdog_update();
 	sleep_ms(5);							//add a short delay because the I2C devices may take some time to init
-	char startingValues[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-//	setPCA(startingValues, sizeof(startingValues), 0);
 #else
 	dbg_printf("****WARNING: I2C disabled!\n");
 #endif  /*defined(NO_I2C)*/
@@ -196,7 +198,9 @@ void entryCore0(void){
 
 
 	/*INIT: syncronize with core 0 so we know that irq's are valid*/
+	watchdog_update();
 	__asm__ volatile ("sev; wfe");			//see RP2040 datasheet section 2.3.3 - both processors wake up at the same time +/- a few clocks
+	watchdog_update();
 	printf("Initiallizeation done! enabling inerrupts!\n");
 
 	/*INIT: interrupt time!*/
@@ -207,7 +211,6 @@ void entryCore0(void){
 	irq_set_enabled(UART0_IRQ, true);
 #endif
 
-	while(1){
 #ifdef NOCTRL
 		irq_set_enabled(IRQ_DMX_RX, false);
 		uart_deinit(DMX_UART);								//if we have no control we should disable the hardware DMX because it would be a headache if this wrote data
@@ -216,11 +219,14 @@ void entryCore0(void){
 		char nextFeild;										//note that I left you no comments when writting this so just leave this alone; it works :)
 		int debugAddr, debugValue;
 		extern DMX_info DMX_data;
+#endif
+	while(1){
+		watchdog_update();
 
+#ifdef NOCTRL
 		printf("enter a command or h for help> ");
 		for(int i=0; i<32; i++){
 			debugString[i] = getchar();
-//			while((debugString[i] = getchar()) != EOF);
 			if(debugString[i] == '\r'){
 				printf("\r\n");
 				break;
@@ -351,36 +357,28 @@ void entryCore0(void){
 void main(void){
 	stdio_init_all();
 	if(sio_hw->cpuid == 0){		//split execution for the two cpu cores
-//		watchdog_update();										//immediately reset it since the reset value is undefined
-
 #if 0
-		/*we are using the watchdog to set the stack pointer from C, this is also safer then forcing the stack pointer
+		/*there is an alternate entry point for a watchdog reset
 
-		signaling through scratch[0] lets us use the watchdog reset when flashing
+		we use scratch[0] to tag that this was an intentional watchdog reset
 		*/
-		if(watchdog_hw->scratch[0] == 0xDEADBEEF){
-			watchdog_enable(0x7fffff, true);
-			watchdog_reboot((int)&entryWdg, SRAM5_BASE, 0x7fffff);	//enable the watchdog
-			watchdog_hw->scratch[0] = 0xDEADBEEF; 				//put something into watchdog memory to say we are coming from POR
+		if(watchdog_hw->scratch[0] != 0xDEADBEEF){				//returned by entryWdg
+			watchdog_enable(2000, true);
+			watchdog_update();
+			watchdog_reboot((int)&entryWdg, 0, 2000);			//enable the watchdog
+			watchdog_hw->scratch[0] = 0xBEEFDEAD; 				//tell the watchdog that we don't need an integrity check
 			__asm__ volatile ("nop");							//force GCC to complete everything before we write to the reset register
-			watchdog_hw->ctrl |= WATCHDOG_CTRL_TRIGGER_BITS;	//force reboot now
+			gpio_init(GPIO_LED);
+			gpio_set_dir(GPIO_LED, GPIO_OUT);
+			gpio_put(GPIO_LED, 0);
+			while(1);
+//			watchdog_hw->ctrl |= WATCHDOG_CTRL_TRIGGER_BITS;	//force reboot now
 		}
 		watchdog_hw->scratch[0] = 0;							//clear this now
 #endif
-		//TODO: find some way to copy the stack frame
-/*
-		__asm__ volatile ( "movs r0, #0x20;"
-						   "lsls r0, r0, #12;"
-						   "movs r1, #0x41;"
-						   "orrs r0, r0, r1;"
-						   "lsls r0, r0, #12;"
-						   "mov  sp, r0;"
-						   : : : "r0","r1");
-*/
-
 #ifdef DEBUG
-		sleep_ms(2000);			//wait so you can latch your terminal if you don't have a JTAG debugger
-		//(you can set it to anything under 8 seconds)
+		sleep_ms(1100);			//wait so you can latch your terminal if you don't have a JTAG debugger
+		//(you can set it to anything under 2 seconds)
 #endif
 
 		dbg_printf("starting initializeation...\n");
@@ -395,21 +393,22 @@ void main(void){
 	while(1);		//impossible (both entries are noreturn)
 }
 
-void __not_in_flash_func(entryWdg)(void){
-	stdio_init_all();
-
-	if(watchdog_hw->scratch[0] == 0xDEADBEEF){
+void entryWdg(void){
+	if(watchdog_hw->scratch[0] == 0xBEEFDEAD){
 		gpio_init(GPIO_LED);
 		gpio_set_dir(GPIO_LED, GPIO_OUT);
 		gpio_put(GPIO_LED, 1);
+		watchdog_hw->scratch[0] = 0xDEADBEEF;
 		main();				//skip everything if we match our check
 	}
 
+	stdio_init_all();
 	//something should be here, but I don't know what I want here
 	//maybe an integrity check?
-	busy_wait_ms(1000);
+//	busy_wait_ms(1000);
 	dbg_printf("Watchdog reboot\r\n");
 
+	watchdog_hw->scratch[0] = 0xDEADBEEF;
 	main();					//I feel powerful calling main()
 							//I've never called main() from C before :)
 }

@@ -9,6 +9,8 @@
 #include <hardware/i2c.h>
 #include <hardware/timer.h>
 #include <hardware/flash.h>
+#include <hardware/resets.h>
+#include <hardware/regs/psm.h>
 #include <busCtrl.h>
 #include <resources.h>
 #include <rtos.h>
@@ -20,56 +22,6 @@ static char   i2c_nextTransmitAddr[8];
 static void*  i2c_nextTransmitDat[8];
 static size_t i2c_nextTransmitLen[8];
 static long   i2c_nextTransmitTim[8];
-
-void isr1_fifo(void){
-#ifdef ISRDEBUG
-	dbg_printf("F");
-#endif
-	uint32_t sio_command;
-	uint32_t nextValue;
-	uint8_t x = 1;
-
-	__asm__ volatile ("cpsid if");
-
-	if(!sio_hw->fifo_st & SIO_FIFO_ST_VLD_BITS)
-		goto irq_exit;
-	
-	sio_command = sio_hw->fifo_rd;
-	if((sio_command & 0xFF00) != 0x100){
-		printf("ERROR: unsupported fifo command: 0x%2X\n", sio_command);
-		goto irq_exit;
-	}
-
-	for(int i=0; i<(sio_command & 0xFF); i+=4){
-		while((!sio_hw->fifo_st & SIO_FIFO_ST_VLD_BITS) && x)
-			x++;				//same timeout method as the send data has
-
-#ifdef DEBUG					//save processining time on the relese build
-		if(!x)
-			dbg_printf("****ERROR: timeout on fifo pop\n");
-#endif
-
-		nextValue = sio_hw->fifo_rd;
-
-		//extract the first data byte from the uint32; set the 9th bit; this implicitly sets the on time (LEDn_ON_[L/H]) to 0
-		//this is so complicated because one line uses two different uint32's as uint8's
-		servoData[i+1] = (((nextValue >> 24) & 0xFF) << 16) + 0x1000000;
-
-		//do the same thing for the next 3 values pakaged with that
-		servoData[i+2] = (((nextValue >> 16) & 0xFF) << 16) + 0x1000000;
-		servoData[i+3] = (((nextValue >> 8) & 0xFF) << 16) + 0x1000000;
-		servoData[i+4] = (((nextValue >> 0) & 0xFF) << 16) + 0x1000000;
-	}
-
-//	add_i2c_transmit(PCA0_ADDR, (uint8_t*)servoData+3, sizeof(servoData)-3);
-	i2c_write_blocking(I2C_MAIN, PCA0_ADDR, (uint8_t*)servoData+3, sizeof(servoData)-3, false);
-
-irq_exit:
-	__asm__ volatile ("cpsie if");
-	while(sio_hw->fifo_st & SIO_FIFO_ST_VLD_BITS)		//clear the FIFO
-		sio_hw->fifo_rd;
-	multicore_fifo_clear_irq();							//clear the IRQ
-}
 
 void add_i2c_transmit(uint8_t addr, const uint8_t* buffer, size_t len){
 	for(int i=0; i<8; i++){		//store the new transfer in the first available spot
@@ -106,20 +58,45 @@ void do_i2c_transmit(void){
 }
 
 /*Put these here because I'm not sure where they go*/
-void __no_inline_not_in_flash_func(write_to_flash)(uint32_t addr, const void* buf, size_t len){
-	char blockCopy[FLASH_SECTOR_SIZE];		//should be small enough to be on the stack like this?
-	int interrupts;
 
-	for(uint32_t i=addr-(addr%FLASH_SECTOR_SIZE); i<=addr+len; i+=FLASH_SECTOR_SIZE){
-		read_from_flash(i, blockCopy, FLASH_SECTOR_SIZE);
-		memcpy(blockCopy+(addr%FLASH_SECTOR_SIZE), buf, len);
-		flash_range_erase(i, FLASH_SECTOR_SIZE);
-		flash_range_program(i, blockCopy, FLASH_PAGE_SIZE);
-	}
+void __no_inline_not_in_flash_func(isr1_flash_prison)(void){
+	__asm__ volatile ("cpsid if");		//clear interrupts
+
+	while(sio_hw->fifo_st & SIO_FIFO_ST_VLD_BITS)
+		sio_hw->fifo_rd;				//clear the fifo
+
+	while(!sio_hw->fifo_st & SIO_FIFO_ST_VLD_BITS);		//wait untill something else is in the fifo
+	sio_hw->fifo_rd;					//clear the fifo again
+
+	__asm__ volatile ("cpsie if");		//re-enable interrupts
 }
 
-void __no_inline_not_in_flash_func(read_from_flash)(uint32_t addr, void* buf, size_t len){
-	for(int i=0; i<len; i++){
-		((char*)buf)[i] = XIP_BASE+addr+i;
+void __not_in_flash_func(write_to_flash)(uint32_t addr, const void* buf, size_t len){
+	char* blockCopy;
+	blockCopy = malloc(FLASH_SECTOR_SIZE);
+
+	for(uint32_t i=addr&(~0xFFF); i<=addr+len; i+=FLASH_SECTOR_SIZE){
+		read_from_flash(i, blockCopy, FLASH_SECTOR_SIZE);
+		memcpy(blockCopy+(addr%FLASH_SECTOR_SIZE), buf, len);
+
+		*(uint32_t*)(PSM_BASE+PSM_FRCE_OFF_OFFSET) = 0x10000;
+//		multicore_fifo_push_blocking(0x200);	//send core one to prision (cut off flash access)
+		reset_block(0x1DBCC9D);					//and kill everything else
+
+		__asm__ volatile ("cpsid if");			//clear interrupts while we cannot access the vecotrs
+
+		flash_range_erase(i, FLASH_SECTOR_SIZE);
+		flash_range_program(i, blockCopy, FLASH_SECTOR_SIZE);
+//		__asm__ volatile ("cpsie if");
+
+		sio_hw->gpio_clr = 1 << GPIO_LED;
+
+//		multicore_fifo_push_blocking(1);		//and realease core 1 to continue its important duties
 	}
+
+	free(blockCopy);
+}
+
+void __not_in_flash_func(read_from_flash)(uint32_t addr, void* buf, size_t len){
+	memcpy((void*)(XIP_BASE+addr), buf, len);
 }

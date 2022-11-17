@@ -35,52 +35,59 @@ void irq_MON_ADC(void){
 	int16_t adc_data;
 	int8_t nextADCInput;
 
-	while(adc_fifo_get_level() != 0){		//if we have more than one thing, do all of them
-		adc_data = adc_fifo_get();			//get all of the data into memory
-		if(adc_data & 0x8000)				//indicates error
-			continue;						//we don't really care if we miss only one sample
+	adc_data = adc_fifo_get();			//get all of the data into memory
+	if(adc_data & 0x8000){				//indicates error
+		nextRead |= 0x80;						//we don't really care if we miss only one sample
+		return;
+	}
 
-		nextADCInput = (adc_hw->cs & ADC_CS_AINSEL_BITS) >> ADC_CS_AINSEL_LSB;
-		if(nextADCInput == 4)					//if the ADC is taking input from the 4th MUX in
-			nextADCInput = 3;					//that is the third type of input for us
-		nextADCInput -= adc_fifo_get_level();
-		while(nextADCInput <= 0)
-			nextADCInput += 3;
+	nextADCInput = adc_get_selected_input();
+
 		
-		//convert data into actual measures (amps and degrees C) (0.8mV/step)
-		//who knows what these case constants mean, I figured them out through trial and error
-		switch(nextADCInput){
-			case 3:		//this is current
-				//convert the current values (40mV/A == 50steps/A)
-				if(adc_data > 2048)
-					current[nextRead & 0xf] = (adc_data-2048)/50;		//current *should* now have a value from -50 to +50
-				else
-					current[nextRead & 0xf] = (2048-adc_data)/50;		//for an absolute current rating
-				break;
+	if(adc_data > 4095){
+		dbg_printf("impossible ADC read\n");
+		nextRead |= 0x80;
+		return;
+	}
 
-			case 2:		//TRIAC temperature
-				//convert the temp sensors (1.3mV/C? == 1.6steps/C?)
-				temp[nextRead & 0xf] = (adc_data - 882)/2+27;			//FIXME: we need numbers for the actual diode we used
-				break;
+	//convert data into actual measures (amps and degrees C) (0.8mV/step)
+	//who knows what these case constants mean, I figured them out through trial and error
+	switch(nextADCInput){
+		case 2:		//this is current
+			//convert the current values (40mV/A == 50steps/A)
+			if(adc_data > 2048)
+				adc_data -= 2048;
 
-			case 1:		//chip temperature
-				//convert the internal temp value (-1.72mV/°C == 2.15steps/°C) (27°C @ 882 read)
-				temp[8] = ((adc_data - 882)/2)+27;					//temp[8] should stay below 85°C; other temps should be good to 105
-				break;
+			//(adc_data/50) is the most recent read in amps
+			//the ADC seems to glitch occasionally so if the value is off by more than 5 amps from last time only allow the value to change by one
+			if(adc_data/50 > (current[nextRead & 0x7]+5))
+				current[nextRead & 0x7]++;
+			else if(adc_data/50 < (current[nextRead & 0x7]-5))
+				current[nextRead & 0x7]--;
+			else if((adc_data/50 < (current[nextRead & 0x7]+5)) && (adc_data/50 > (current[nextRead & 0x7]-5)))
+				current[nextRead & 0x7] = adc_data/50;
 
-			default:		//something must have gone wrong in memory to be here
-#if defined(DEBUG)
-				dbg_printf("unused ADC read: %i\n", nextRead >> 5);
-#endif
-				;			//null statement so it compiles non-debug
-		}
-		//the actual build will have optimizeations so this is just as good, if not better than a bit field
-		if(nextADCInput == 4){
-			nextRead++;
-			nextRead &= ~0xF0;			//if our bit field overflows we have a buffer bit we can clear
-			gpio_put_masked(1 << GPIO_ADC_SEL_A | 1 << GPIO_ADC_SEL_B | 1 << GPIO_ADC_SEL_C, 
-							(nextRead+2 & 0x7) << GPIO_ADC_SEL_C);		//set the MUX GPIOs to whatever the var says they should be
-		}
+			break;
+
+		case 1:		//TRIAC temperature
+			//convert the temp sensors (1.3mV/C? == 1.6steps/C?)
+			temp[nextRead & 0x7] = (adc_data - 882)/2+27;			//FIXME: we need numbers for the actual diode we used
+			break;
+
+		case 4:		//chip temperature
+			//convert the internal temp value (-1.72mV/°C == 2.15steps/°C) (27°C @ 882 read)
+			temp[8] = ((adc_data - 882)/2)+27;					//temp[8] should stay below 85°C; other temps should be good to 105
+			break;
+
+		default:		//something must have gone wrong in memory to be here
+			dbg_printf("unused ADC read: %i\n", nextRead >> 5);
+	}
+	
+	if(nextADCInput == 2){
+		nextRead++;
+		nextRead |= 0x80;
+		gpio_put_masked(1 << GPIO_ADC_SEL_A | 1 << GPIO_ADC_SEL_B | 1 << GPIO_ADC_SEL_C, 
+						(nextRead & 0x7) << (GPIO_ADC_SEL_C));		//set the MUX GPIOs to whatever the var says they should be
 	}
 }
 
@@ -174,7 +181,7 @@ void crit_lim_temp(int i){
 
 		//disable everything including the clocks
 		//corruption can happen if we disable the running core so leave core1 and the XIP running
-		*(io_rw_32*)(PSM_BASE+PSM_FRCE_OFF_OFFSET) = 0x67FF;
+		*(io_rw_32*)(PSM_BASE+PSM_FRCE_OFF_OFFSET) = 0xEFFF;
 		__asm__ volatile ("wfi");			//wait for an interrupt (which can never happen)
 
 		//here we only have one processor sleeping whith irq's off so we need to reset
@@ -185,7 +192,6 @@ void crit_lim_temp(int i){
 void crit_lim_current(int i){
 	if(i < 8){
 		if(!DMX_isChanLocked(triacBase+i)){
-			printf("****ERROR: reached current limit on channel!\n");
 			triacVals[i] = 0;			//turn off the overloaded channel
 			setTriacs(triacVals, 8, 0);
 			DMX_lockoutChan(triacBase+i);
@@ -206,21 +212,28 @@ void triacSetBase(uint16_t baseAddr){
 
 void read_sensors(void){
 	int current_sum;
+	static int current_avg[8];
 	current_sum = 0;			//reset it every time for now
 
+	if(!nextRead & 0x80)
+		return;
 
-	for(int i=0; i<8; i++){
+	nextRead &= ~0x80;
+	sleep_us(50);
+	adc_hw->cs |= ADC_CS_START_ONCE_BITS;					//start the next conversion
+
+	for(int i=1; i<8; i++){									//FIXME: channel 0 makes no sense, so just ignore it
 		//check the current from highest to lowest
 		//and don't call the lower handlers
-		if(current[i] > I_CHAN_CRIT){
+		if((current_avg[i] > I_CHAN_CRIT)){
 			crit_lim_current(i);
 			goto checkTempLim;
 		}
-		if(current[i] > I_CHAN_ERR){
+		if((current_avg[i] > I_CHAN_ERR)){
 			err_lim_current(i);
 			goto checkTempLim;
 		}
-		if(current[i] > I_CHAN_PRE){
+		if((current_avg[i] > I_CHAN_PRE)){
 			pre_lim_current(i);
 			goto checkTempLim;
 		}
@@ -240,34 +253,35 @@ checkTempLim:
 			pre_lim_temp(i);
 			goto finishReadLim;
 		}
+
+		if(temp[8] > 85)
+			crit_lim_temp(8);
+		if(temp[8] > 75)					//the RP2040 is not able to handle as high a temp as everything else
+			err_lim_temp(8);
 #endif
 
 finishReadLim:
-		current_sum += current[i];		//keep a running tally
+		current_avg[i] = ((current_avg[i]*9)+current[i])/10;
+		current_sum += current_avg[i];		//keep a running tally
 		triacVals[i] = DMX_data.intens[triacBase+i];		//update the real values; note that the get is after the limit calls
 	}
 
 #ifdef LOG_ADC
 	if((time_us_32() / 1000) % 500 == 0){ 	//print telemetry to serial every 500ms
 		for(int i=0; i<8; i++){
-			dbg_printf("current %i: %i\n", i, (int)current[i]);
+			dbg_printf("current %i: %i\n", i, (int)current_avg[i]);
 			dbg_printf("temp %i: %i\n", i, (int)temp[i]);
 		}
 		dbg_printf("total current: %i\n", current_sum);
 		dbg_printf("RP2040 temp: %i\n", temp[8]);
 	}
 #endif
-
+/*
 	if(current_sum > I_LIM_TOTAL+5)
 		crit_lim_current(8);			//a little buffer of 5 amps above the max before we shut down compleately
 	if(current_sum > I_LIM_TOTAL)
 		err_lim_current(8);
-
-//	if(temp[8] > 85)
-//		crit_lim_temp(8);
-//	if(temp[8] > 75)					//the RP2040 is not able to handle as high a temp as everything else
-//		err_lim_temp(8);
-
+*/
 
 	//if we reach a critical point we need to reset manually by turning it off and turning it on again
 	bool isILim = true;

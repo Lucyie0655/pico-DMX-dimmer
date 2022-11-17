@@ -20,7 +20,7 @@ some datasheets I've used:
 //if you have to change random numbers change the bauds in init.h
 
 typedef struct {			//656 bytes
-	int16_t baseAddr;		//set to -1 to disable; values 513-(-2) are undifined
+	int16_t baseAddr;		//values 513-(-1) are undifined
 	uint8_t noAddrs[16];
 	uint64_t lockedChan[4];	//keep a mask of what channels cannot be turned on NOTE: only allows 256 total channels
 	uint8_t totalAddrs;		//just all the noAddrs added together
